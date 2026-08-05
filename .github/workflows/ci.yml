@@ -1,0 +1,40 @@
+# horon-engine CI — test suite on x86-64 AND arm64.
+#
+# The arm64 leg matters for the determinism claim: Q64.64 fixed-point
+# results must be bit-identical across architectures (Horon's golden-CRC
+# determinism test is the end-to-end gate; this runs the engine's own suite,
+# including the property tests and the hardening regression suite).
+#
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout horon-engine
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check (all targets, warnings are errors — missing_docs is enforced)
+        env:
+          GMATH_PROFILE: embedded
+          RUSTFLAGS: -D warnings
+        run: cargo check --all-targets
+
+      - name: Test
+        env:
+          GMATH_PROFILE: embedded
+        run: cargo test

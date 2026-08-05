@@ -1,0 +1,53 @@
+# horon-engine benchmarks — criterion suites (power_diagram + semantic).
+#
+# MANUAL TRIGGER ONLY, deliberately: benchmark numbers from shared CI
+# runners are only meaningful as *relative regression signals* between runs
+# on the same runner class — published numbers come from a dedicated
+# machine (see BENCHMARKS.md).
+#
+# To run manually: Actions → Bench → Run workflow (optionally set a filter).
+name: Bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: "criterion filter (e.g. nearest_semantic) — empty runs everything"
+        required: false
+        default: ""
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout horon-engine
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Record runner specs (context for the numbers)
+        run: |
+          lscpu | grep -E "Model name|^CPU\(s\)|MHz" || true
+          uname -r
+          rustc --version
+
+      - name: Bench power_diagram
+        env:
+          GMATH_PROFILE: embedded
+        run: cargo bench --bench power_diagram -- ${{ inputs.filter }}
+
+      - name: Bench semantic (the O(n×d) scan wall)
+        env:
+          GMATH_PROFILE: embedded
+        run: cargo bench --bench semantic -- ${{ inputs.filter }}
+
+      - name: Upload criterion reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-${{ github.run_id }}
+          path: target/criterion
+          retention-days: 90
