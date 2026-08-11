@@ -1,6 +1,6 @@
 [package]
 name = "horon-engine"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Hyperbolic tree tensor engine - hierarchical data storage with depth-independent lookups"
 authors = ["Niels Erik Toren"]
