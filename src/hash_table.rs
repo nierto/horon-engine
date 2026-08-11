@@ -21,7 +21,8 @@ use std::sync::Mutex;
 use dashmap::DashMap;
 use sha3::{Sha3_512, Digest};
 use g_math::fixed_point::{FixedPoint, FixedVector};
-use super::hyperbolic_geometry::{PoincareDisk, HyperbolicPoint};
+use super::hyperbolic_geometry::{PoincareDisk, HyperbolicPoint, distance_to_ratio};
+use crate::metric_tree::{hyperbolic_ratio_sq, sq_ratio_separation_exceeds};
 use crate::constants;
 
 // ---------------------------------------------------------------------------
@@ -192,6 +193,18 @@ pub struct BucketEntry {
     pub point: HyperbolicPoint,
     /// Tree level
     pub level: u32,
+    /// `‖point‖²`, cached at construction — turns every VP-tree score into
+    /// one dot product plus arithmetic (no sqrt), same trick as
+    /// `metric_tree::CachedNormPoint`.
+    pub norm_sq: FixedPoint,
+}
+
+impl BucketEntry {
+    /// Construct an entry, caching the squared norm of `point`.
+    pub fn new(unique_id: String, point: HyperbolicPoint, level: u32) -> Self {
+        let norm_sq = point.coords().length_squared();
+        Self { unique_id, point, level, norm_sq }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +237,12 @@ fn euclidean_distance_sq(a: &HyperbolicPoint, b: &HyperbolicPoint) -> FixedPoint
 
 /// Buffered insertion threshold: rebuild VP-tree after this many pending inserts.
 const VP_BUFFER_THRESHOLD: usize = 32;
+
+/// Rebuild when the buffer reaches `tree_len / VP_REBUILD_DIVISOR` (floor
+/// `VP_BUFFER_THRESHOLD`). Smaller = fewer rebuilds, larger buffer, slower
+/// queries. This is the insert/query dial.
+const VP_REBUILD_DIVISOR: usize = 16;
+
 
 /// Lazy deletion threshold: rebuild VP-tree after this many pending deletes.
 const VP_DELETE_THRESHOLD: usize = 32;
@@ -282,7 +301,15 @@ impl VPTree {
         self.deleted.remove(&entry.unique_id);
 
         self.buffer.push(entry);
-        if self.buffer.len() >= VP_BUFFER_THRESHOLD {
+        // Rebuild on a FRACTION of tree size, not a fixed count. With a fixed
+        // threshold the tree is rebuilt every 32 inserts no matter how large
+        // it has grown, so amortized cost is O(m log m / 32) — linear in m,
+        // which makes a bulk load quadratic. Scaling the threshold with m
+        // makes it O(log m) amortized. The buffer is scanned linearly by
+        // queries, so the divisor bounds that cost too.
+        let tree_len = self.tree_size;
+        let threshold = VP_BUFFER_THRESHOLD.max(tree_len / VP_REBUILD_DIVISOR);
+        if self.buffer.len() >= threshold {
             self.rebuild();
         }
     }
@@ -318,16 +345,24 @@ impl VPTree {
     pub fn find_in_radius(&self, center: &HyperbolicPoint, radius: FixedPoint) -> Vec<(String, FixedPoint)> {
         let mut results = Vec::new();
 
-        // Search the VP-tree (O(log n) with pruning)
+        // One conversion for the whole query: tree and buffer both filter in
+        // SQUARED-ratio proxy space (monotone, so `s <= s(radius)` is exactly
+        // `d <= radius`); scores are sqrt-free via the cached norms, and only
+        // reported hits pay the exact kernel — with values bit-identical to
+        // the pre-proxy code.
+        let radius_sq = {
+            let r = distance_to_ratio(radius);
+            r * r
+        };
+        let center_norm_sq = center.coords().length_squared();
         if let Some(ref root) = self.root {
-            Self::search_radius(root, center, radius, &self.deleted, &mut results);
+            Self::search_radius(root, center, center_norm_sq, radius_sq, &self.deleted, &mut results);
         }
 
-        // Linear scan of the small buffer (bounded by VP_BUFFER_THRESHOLD)
         for entry in &self.buffer {
-            let dist = center.hyperbolic_distance(&entry.point);
-            if dist <= radius {
-                results.push((entry.unique_id.clone(), dist));
+            let s = hyperbolic_ratio_sq(center, center_norm_sq, &entry.point, entry.norm_sq);
+            if s <= radius_sq {
+                results.push((entry.unique_id.clone(), center.hyperbolic_distance(&entry.point)));
             }
         }
 
@@ -339,35 +374,44 @@ impl VPTree {
     pub fn find_nearest(&self, point: &HyperbolicPoint, k: usize) -> Vec<(String, FixedPoint)> {
         if k == 0 { return Vec::new(); }
 
-        let mut candidates: Vec<(String, FixedPoint)> = Vec::with_capacity(k + 1);
-        // Initial search radius: any value at or above the largest distance
-        // hyperbolic_distance can return is safe (a too-small tau would prune
-        // real neighbours before k are found). The metric is bounded by the
-        // 0.99 boundary clamp — 2·atanh(0.99) ≈ 5.3 from the origin, and the
-        // antipodal sentinel is 100 — so 200 clears every reachable distance.
-        let mut tau = FixedPoint::from_int(200);
+        // Candidates and tau hold SQUARED Mobius ratios (the sqrt-free,
+        // atanh-free proxy — one dot product per score thanks to the cached
+        // norms). Monotone in distance, so ranking is identical; only the k
+        // winners pay the exact kernel, below.
+        let query_norm_sq = point.coords().length_squared();
+        let mut candidates: Vec<(FixedPoint, &BucketEntry)> = Vec::with_capacity(k + 1);
+        // Squared ratios are capped strictly below 1, so 1 clears every
+        // reachable score (the proxy-space analogue of the old 200-distance
+        // sentinel); no prune can fire against it.
+        let mut tau = FixedPoint::from_int(1);
 
         // Search the VP-tree (O(log n) with pruning)
         if let Some(ref root) = self.root {
-            Self::search_knn(root, point, k, &self.deleted, &mut candidates, &mut tau);
+            Self::search_knn(root, point, query_norm_sq, k, &self.deleted, &mut candidates, &mut tau);
         }
 
-        // Linear scan of the small buffer
+        // Linear scan of the buffer, in the same proxy space as the tree
+        // search so the shared candidate list stays in one unit.
         for entry in &self.buffer {
-            let dist = point.hyperbolic_distance(&entry.point);
-            if candidates.len() < k || dist < tau {
-                candidates.push((entry.unique_id.clone(), dist));
-                candidates.sort_by(|a, b| cmp_fp(a.1, b.1));
+            let s = hyperbolic_ratio_sq(point, query_norm_sq, &entry.point, entry.norm_sq);
+            if candidates.len() < k || s < tau {
+                candidates.push((s, entry));
+                candidates.sort_by(|a, b| cmp_fp(a.0, b.0).then_with(|| a.1.unique_id.cmp(&b.1.unique_id)));
                 if candidates.len() > k {
                     candidates.truncate(k);
                 }
                 if candidates.len() == k {
-                    tau = candidates.last().unwrap().1;
+                    tau = candidates.last().unwrap().0;
                 }
             }
         }
 
+        // Winners get exact distances via the full kernel — bit-identical
+        // values to the pre-proxy code, paid k times instead of per entry.
         candidates
+            .into_iter()
+            .map(|(_, e)| (e.unique_id.clone(), point.hyperbolic_distance(&e.point)))
+            .collect()
     }
 
     // ---- Internal VP-tree machinery ----
@@ -410,11 +454,17 @@ impl VPTree {
     /// farthest node is removed, so the bound shrinks back under churn rather
     /// than staying permanently inflated by a since-deleted outlier.
     pub fn farthest_from(&self, center: &HyperbolicPoint) -> Option<(String, FixedPoint)> {
-        let mut best: Option<(String, FixedPoint)> = None;
+        // Rank by the Mobius ratio: monotone in distance, so the argmax is
+        // identical, at ~8.3 us against ~20.5 us per entry. This walks EVERY
+        // live entry, so the saving is proportional to bucket size. The
+        // winner is converted back before returning — callers use the value
+        // as a real pruning radius, so it must be a true distance.
+        let center_norm_sq = center.coords().length_squared();
+        let mut best: Option<(FixedPoint, String, HyperbolicPoint)> = None;
         let mut consider = |entry: &BucketEntry| {
-            let dist = center.hyperbolic_distance(&entry.point);
-            if best.as_ref().is_none_or(|(_, m)| dist > *m) {
-                best = Some((entry.unique_id.clone(), dist));
+            let s = hyperbolic_ratio_sq(center, center_norm_sq, &entry.point, entry.norm_sq);
+            if best.as_ref().is_none_or(|(m, _, _)| s > *m) {
+                best = Some((s, entry.unique_id.clone(), entry.point.clone()));
             }
         };
         for entry in &self.buffer {
@@ -423,7 +473,9 @@ impl VPTree {
         if let Some(ref root) = self.root {
             Self::visit_live(root, &self.deleted, &mut consider);
         }
-        best
+        // The winner's exact distance, bit-identical to the pre-proxy code —
+        // callers use it as a real pruning radius.
+        best.map(|(_, id, pt)| (id, center.hyperbolic_distance(&pt)))
     }
 
     /// Visit each live (non-lazily-deleted) entry in the tree, borrowing.
@@ -464,18 +516,27 @@ impl VPTree {
         // Pick vantage point (first entry, deterministic)
         let vp = entries.swap_remove(0);
 
-        // Compute distances from VP to all remaining entries
+        // Rank by the Möbius RATIO, not the distance. atanh is strictly
+        // monotone on [0,1), so ratio ordering == distance ordering and the
+        // tree built from it is IDENTICAL — but the ratio skips the
+        // transcendental (~20.5 us -> ~8.3 us per pair). Build is O(m log m)
+        // of these, so it dominates insert cost; the median is converted back
+        // to a true distance once per node, which is what search compares
+        // against, so pruning is untouched.
         let mut with_dists: Vec<(BucketEntry, FixedPoint)> = entries
             .into_iter()
             .map(|e| {
-                let d = vp.point.hyperbolic_distance(&e.point);
-                (e, d)
+                let s = hyperbolic_ratio_sq(&vp.point, vp.norm_sq, &e.point, e.norm_sq);
+                (e, s)
             })
             .collect();
 
-        // Sort by distance to find median
+        // Sort by squared ratio to find the median (same order as by
+        // distance — squaring is monotone on non-negatives).
         with_dists.sort_by(|a, b| cmp_fp(a.1, b.1));
 
+        // Stored as a SQUARED ratio: build and both searches now share one
+        // proxy space end to end, and the build never pays a sqrt at all.
         let median = with_dists[with_dists.len() / 2].1;
 
         // Partition: strictly less than median -> left, rest -> right
@@ -494,96 +555,112 @@ impl VPTree {
         }))
     }
 
-    /// Recursive range search on the VP-tree.
+    /// Recursive range search on the VP-tree, in SQUARED-ratio proxy space.
     ///
-    /// At each node, computes distance d from center to vantage point, then:
-    /// - Check VP itself (d <= radius?)
-    /// - Prune left subtree if d - radius > median (all left entries too far)
-    /// - Prune right subtree if d + radius < median (all right entries too close to VP)
+    /// `radius_sq` is `distance_to_ratio(radius)²`, converted once by the
+    /// caller. Scores are sqrt-free (cached norms); pruning delegates to
+    /// `sq_ratio_separation_exceeds`, the conservatively-bounded tanh
+    /// identity shared with the metric tree. Hits pay the exact kernel once
+    /// each, so reported distances are bit-identical to the pre-proxy code.
     fn search_radius(
         node: &VPNode,
         center: &HyperbolicPoint,
-        radius: FixedPoint,
+        center_norm_sq: FixedPoint,
+        radius_sq: FixedPoint,
         deleted: &HashSet<String>,
         results: &mut Vec<(String, FixedPoint)>,
     ) {
-        let d = center.hyperbolic_distance(&node.entry.point);
+        let s = hyperbolic_ratio_sq(center, center_norm_sq, &node.entry.point, node.entry.norm_sq);
 
-        if d <= radius && !deleted.contains(&node.entry.unique_id) {
-            results.push((node.entry.unique_id.clone(), d));
+        if s <= radius_sq && !deleted.contains(&node.entry.unique_id) {
+            results.push((
+                node.entry.unique_id.clone(),
+                center.hyperbolic_distance(&node.entry.point),
+            ));
         }
 
-        // Left subtree: entries with dist_to_vp < median
-        // By triangle inequality, any left entry's distance to center is >= |d - dist_to_vp|
-        // Minimum possible: d - median (when dist_to_vp approaches median)
-        // Search left if: d - radius <= median
+        // Descend left unless provably d - median > radius.
         if let Some(ref left) = node.left {
-            if d - radius <= node.median {
-                Self::search_radius(left, center, radius, deleted, results);
+            let prune = s > node.median && sq_ratio_separation_exceeds(s, node.median, radius_sq);
+            if !prune {
+                Self::search_radius(left, center, center_norm_sq, radius_sq, deleted, results);
             }
         }
 
-        // Right subtree: entries with dist_to_vp >= median
-        // Minimum possible distance to center: median - d (when dist_to_vp = median)
-        // Search right if: d + radius >= median
+        // Descend right unless provably median - d > radius.
         if let Some(ref right) = node.right {
-            if d + radius >= node.median {
-                Self::search_radius(right, center, radius, deleted, results);
+            let prune = node.median > s && sq_ratio_separation_exceeds(node.median, s, radius_sq);
+            if !prune {
+                Self::search_radius(right, center, center_norm_sq, radius_sq, deleted, results);
             }
         }
     }
 
-    /// Recursive KNN search on the VP-tree.
+    /// Recursive KNN search on the VP-tree, in SQUARED-ratio proxy space.
     ///
-    /// Maintains a shrinking search radius `tau` (distance to k-th best candidate).
+    /// `candidates` and the shrinking `tau` hold squared Mobius ratios —
+    /// sqrt-free and atanh-free per score (one dot product, thanks to the
+    /// cached norms). Monotone in distance, so ranking is identical; the
+    /// exact kernel is paid only by the k winners, in `find_nearest`.
+    /// Pruning delegates to `sq_ratio_separation_exceeds` — the same
+    /// conservatively-bounded tanh-identity predicate the metric tree uses.
     /// Searches the closer subtree first for better early pruning.
-    fn search_knn(
-        node: &VPNode,
+    #[allow(clippy::too_many_arguments)]
+    fn search_knn<'a>(
+        node: &'a VPNode,
         center: &HyperbolicPoint,
+        center_norm_sq: FixedPoint,
         k: usize,
         deleted: &HashSet<String>,
-        candidates: &mut Vec<(String, FixedPoint)>,
+        candidates: &mut Vec<(FixedPoint, &'a BucketEntry)>,
         tau: &mut FixedPoint,
     ) {
-        let d = center.hyperbolic_distance(&node.entry.point);
+        let s = hyperbolic_ratio_sq(center, center_norm_sq, &node.entry.point, node.entry.norm_sq);
 
         // Consider the vantage point
         if !deleted.contains(&node.entry.unique_id) {
-            if candidates.len() < k || d < *tau {
-                candidates.push((node.entry.unique_id.clone(), d));
-                candidates.sort_by(|a, b| cmp_fp(a.1, b.1));
+            if candidates.len() < k || s < *tau {
+                candidates.push((s, &node.entry));
+                candidates.sort_by(|a, b| cmp_fp(a.0, b.0).then_with(|| a.1.unique_id.cmp(&b.1.unique_id)));
                 if candidates.len() > k {
                     candidates.truncate(k);
                 }
                 if candidates.len() == k {
-                    *tau = candidates.last().unwrap().1;
+                    *tau = candidates.last().unwrap().0;
                 }
             }
         }
 
         // Search the closer subtree first for tighter pruning
-        let search_left_first = d < node.median;
+        let search_left_first = s < node.median;
+
+        let prune_left = |s: FixedPoint, tau: FixedPoint| {
+            s > node.median && sq_ratio_separation_exceeds(s, node.median, tau)
+        };
+        let prune_right = |s: FixedPoint, tau: FixedPoint| {
+            node.median > s && sq_ratio_separation_exceeds(node.median, s, tau)
+        };
 
         if search_left_first {
             if let Some(ref left) = node.left {
-                if d - *tau <= node.median {
-                    Self::search_knn(left, center, k, deleted, candidates, tau);
+                if !prune_left(s, *tau) {
+                    Self::search_knn(left, center, center_norm_sq, k, deleted, candidates, tau);
                 }
             }
             if let Some(ref right) = node.right {
-                if d + *tau >= node.median {
-                    Self::search_knn(right, center, k, deleted, candidates, tau);
+                if !prune_right(s, *tau) {
+                    Self::search_knn(right, center, center_norm_sq, k, deleted, candidates, tau);
                 }
             }
         } else {
             if let Some(ref right) = node.right {
-                if d + *tau >= node.median {
-                    Self::search_knn(right, center, k, deleted, candidates, tau);
+                if !prune_right(s, *tau) {
+                    Self::search_knn(right, center, center_norm_sq, k, deleted, candidates, tau);
                 }
             }
             if let Some(ref left) = node.left {
-                if d - *tau <= node.median {
-                    Self::search_knn(left, center, k, deleted, candidates, tau);
+                if !prune_left(s, *tau) {
+                    Self::search_knn(left, center, center_norm_sq, k, deleted, candidates, tau);
                 }
             }
         }
@@ -1053,11 +1130,7 @@ impl HyperbolicHashTable {
             // never skip the bucket that actually holds them.
             let center_dist = self.poincare_disk.distance(point, bucket.region.center());
             bucket.note_node_distance(unique_id, center_dist);
-            bucket.vp_tree.lock().unwrap_or_else(|e| e.into_inner()).insert(BucketEntry {
-                unique_id: unique_id.to_string(),
-                point: point.clone(),
-                level,
-            });
+            bucket.vp_tree.lock().unwrap_or_else(|e| e.into_inner()).insert(BucketEntry::new(unique_id.to_string(), point.clone(), level));
         }
         self.node_to_bucket.insert(unique_id.to_string(), bucket_hash.clone());
         Some(bucket_hash)
@@ -1297,11 +1370,7 @@ mod tests {
         ];
 
         for (id, coords) in &points {
-            vp.insert(BucketEntry {
-                unique_id: id.to_string(),
-                point: disk.point_from_f32_slice(coords),
-                level: 0,
-            });
+            vp.insert(BucketEntry::new(id.to_string(), disk.point_from_f32_slice(coords), 0));
         }
 
         assert_eq!(vp.live_count(), 5);
@@ -1327,16 +1396,8 @@ mod tests {
         let disk = PoincareDisk::new(2);
         let mut vp = VPTree::new();
 
-        vp.insert(BucketEntry {
-            unique_id: "x".to_string(),
-            point: disk.point_from_f32_slice(&[0.1, 0.0]),
-            level: 0,
-        });
-        vp.insert(BucketEntry {
-            unique_id: "y".to_string(),
-            point: disk.point_from_f32_slice(&[0.2, 0.0]),
-            level: 0,
-        });
+        vp.insert(BucketEntry::new("x".to_string(), disk.point_from_f32_slice(&[0.1, 0.0]), 0));
+        vp.insert(BucketEntry::new("y".to_string(), disk.point_from_f32_slice(&[0.2, 0.0]), 0));
 
         assert_eq!(vp.live_count(), 2);
 
@@ -1366,11 +1427,7 @@ mod tests {
             coords[0] = r * cos_a;
             coords[1] = r * sin_a;
 
-            vp.insert(BucketEntry {
-                unique_id: format!("node_{}", i),
-                point: HyperbolicPoint::new(coords),
-                level: 0,
-            });
+            vp.insert(BucketEntry::new(format!("node_{}", i), HyperbolicPoint::new(coords), 0));
         }
 
         // After rebuild, tree should be structured (root is Some)
@@ -1391,11 +1448,7 @@ mod tests {
         // Insert points at known increasing distances from origin
         let distances = [0.05f32, 0.1, 0.2, 0.3, 0.5, 0.7];
         for (i, &d) in distances.iter().enumerate() {
-            vp.insert(BucketEntry {
-                unique_id: format!("p{}", i),
-                point: disk.point_from_f32_slice(&[d, 0.0]),
-                level: 0,
-            });
+            vp.insert(BucketEntry::new(format!("p{}", i), disk.point_from_f32_slice(&[d, 0.0]), 0));
         }
 
         let origin = disk.origin();
@@ -1563,3 +1616,4 @@ mod tests {
         assert_eq!(after, near_dist, "the bound must equal the remaining node's center distance");
     }
 }
+

@@ -108,6 +108,71 @@ impl Metric<Vec<FixedPoint>> for EuclideanMetric {
     fn distance(&self, a: &Vec<FixedPoint>, b: &Vec<FixedPoint>) -> FixedPoint {
         g_math::fixed_point::imperative::fused::euclidean_distance(a, b)
     }
+
+    fn has_proxy(&self) -> bool {
+        true
+    }
+
+    /// Squared distance — the fused kernel minus its final sqrt. The sqrt is
+    /// ~99% of the exact kernel's cost (measured ~23 us vs ~150 ns) and
+    /// squaring is strictly monotone, so ranking and even tie behaviour are
+    /// identical; the k winners get exact distances in `knn`'s finish step.
+    fn proxy(&self, a: &Vec<FixedPoint>, b: &Vec<FixedPoint>) -> FixedPoint {
+        g_math::fixed_point::imperative::fused::euclidean_distance_squared(a, b)
+    }
+
+    /// Prune left ⟺ provably `d_q − m > τ`, entirely in squared space.
+    /// Squaring both (non-negative, given `d_q > m`) sides:
+    ///
+    /// ```text
+    /// s_q + m − s_τ > 2·√(s_q·m)
+    /// ```
+    ///
+    /// One irrational term, replaced by [`sqrt_upper_bound`] — an upper
+    /// bound only ever makes the right side larger, so the test may miss a
+    /// prune (a wasted visit) but can never prune a true neighbor.
+    ///
+    /// Unlike the hyperbolic proxies (ratios < 1), squared Euclidean scores
+    /// are unbounded, so `s_q·m` could saturate Q64.64 — and a saturated
+    /// product UNDER-estimates the bound, which would flip conservatism.
+    /// Guard: refuse to prune when either score is large enough for the
+    /// product to exceed the representable range (integer part ≥ 2^31,
+    /// i.e. distance ≥ ~46341). Refusing to prune is always sound.
+    fn prune_left(&self, s_query: FixedPoint, median: FixedPoint, s_worst: FixedPoint) -> bool {
+        if s_query <= median {
+            return false; // d_q ≤ m — the left ball may contain neighbors
+        }
+        if sq_product_may_saturate(s_query, median) {
+            return false;
+        }
+        let two = FixedPoint::from_int(2);
+        let x_ub = sqrt_upper_bound(s_query * median);
+        s_query + median - s_worst > two * x_ub
+    }
+
+    /// Prune right ⟺ provably `m − d_q > τ` (same identity, mirrored:
+    /// requires `m > d_q`).
+    fn prune_right(&self, s_query: FixedPoint, median: FixedPoint, s_worst: FixedPoint) -> bool {
+        if median <= s_query {
+            return false;
+        }
+        if sq_product_may_saturate(s_query, median) {
+            return false;
+        }
+        let two = FixedPoint::from_int(2);
+        let x_ub = sqrt_upper_bound(s_query * median);
+        s_query + median - s_worst > two * x_ub
+    }
+}
+
+/// Whether `a * b` risks leaving Q64.64's representable range. Each raw is
+/// value·2^64; the product's value is a·b, which needs integer part < 2^63.
+/// Requiring both integer parts < 2^31 (raw < 2^95) guarantees it with a
+/// full bit to spare.
+#[inline]
+fn sq_product_may_saturate(a: FixedPoint, b: FixedPoint) -> bool {
+    const LIMIT: i128 = 1 << 95;
+    a.raw() >= LIMIT || b.raw() >= LIMIT
 }
 
 /// A Poincaré-disk point with its squared Euclidean norm cached — the
@@ -158,6 +223,73 @@ fn near_boundary_sq() -> FixedPoint {
     constants::near_boundary() * constants::near_boundary()
 }
 
+/// Squared Möbius ratio `r²` from pre-cached squared norms — the sqrt-free,
+/// atanh-free proxy score shared by [`HyperbolicMetric`] and the hash-table
+/// VP-tree. Monotone in hyperbolic distance; guards mirror the exact
+/// kernel's (origin cases, degenerate denominator, boundary cap).
+pub(crate) fn hyperbolic_ratio_sq(
+    a: &HyperbolicPoint,
+    a_norm_sq: FixedPoint,
+    b: &HyperbolicPoint,
+    b_norm_sq: FixedPoint,
+) -> FixedPoint {
+    let zero = FixedPoint::from_int(0);
+    let one = FixedPoint::from_int(1);
+    let two = FixedPoint::from_int(2);
+    let cap = near_boundary_sq();
+
+    // Origin special cases mirror hyperbolic_ratio: ratio(0, q) = |q|,
+    // so the squared proxy is the squared norm (capped like the main
+    // branch, so ties beyond the cap stay consistent).
+    let eps_sq = constants::small_epsilon() * constants::small_epsilon();
+    if a_norm_sq < eps_sq {
+        return if b_norm_sq > cap { cap } else { b_norm_sq };
+    }
+    if b_norm_sq < eps_sq {
+        return if a_norm_sq > cap { cap } else { a_norm_sq };
+    }
+
+    let dot = a.coords().dot(b.coords());
+    let mut dist_sq = a_norm_sq + b_norm_sq - two * dot;
+    if dist_sq < zero {
+        dist_sq = zero; // coincident points + rounding
+    }
+    let den_sq = one - two * dot + a_norm_sq * b_norm_sq;
+
+    // Degenerate |1−āb| ≈ 0 guard — the SAME threshold the exact kernel
+    // uses (`hyperbolic_ratio`), not the older ε² one: that guard sat ten
+    // orders of magnitude above the arithmetic floor and saturated deep
+    // near-boundary pairs to the cap, scoring a genuinely-near deep
+    // neighbor as maximally far (caught by tests/depth.rs at depth 11).
+    // Also catches rounding-negative values.
+    if den_sq < constants::min_safe_denominator() {
+        return cap;
+    }
+
+    let r_sq = dist_sq / den_sq;
+    if r_sq > cap {
+        cap
+    } else {
+        r_sq
+    }
+}
+
+/// Provably `d_hi − d_lo > τ`, entirely in squared-ratio space (the tanh
+/// subtraction identity with [`sqrt_upper_bound`] standing in for the one
+/// irrational term — conservative, so a true neighbor is never pruned).
+/// Caller must ensure `s_hi > s_lo`; the expression itself is symmetric.
+pub(crate) fn sq_ratio_separation_exceeds(
+    s_hi: FixedPoint,
+    s_lo: FixedPoint,
+    s_tau: FixedPoint,
+) -> bool {
+    let one = FixedPoint::from_int(1);
+    let two = FixedPoint::from_int(2);
+    let x_ub = sqrt_upper_bound(s_hi * s_lo);
+    let one_minus_x = one - x_ub;
+    s_hi + s_lo - two * x_ub > s_tau * (one_minus_x * one_minus_x)
+}
+
 impl Metric<CachedNormPoint> for HyperbolicMetric {
     fn distance(&self, a: &CachedNormPoint, b: &CachedNormPoint) -> FixedPoint {
         a.point.hyperbolic_distance(&b.point)
@@ -168,41 +300,7 @@ impl Metric<CachedNormPoint> for HyperbolicMetric {
     }
 
     fn proxy(&self, a: &CachedNormPoint, b: &CachedNormPoint) -> FixedPoint {
-        let zero = FixedPoint::from_int(0);
-        let one = FixedPoint::from_int(1);
-        let two = FixedPoint::from_int(2);
-        let cap = near_boundary_sq();
-
-        // Origin special cases mirror hyperbolic_ratio: ratio(0, q) = |q|,
-        // so the squared proxy is the squared norm (capped like the main
-        // branch, so ties beyond the cap stay consistent).
-        let eps_sq = constants::small_epsilon() * constants::small_epsilon();
-        if a.norm_sq < eps_sq {
-            return if b.norm_sq > cap { cap } else { b.norm_sq };
-        }
-        if b.norm_sq < eps_sq {
-            return if a.norm_sq > cap { cap } else { a.norm_sq };
-        }
-
-        let dot = a.point.coords().dot(b.point.coords());
-        let mut dist_sq = a.norm_sq + b.norm_sq - two * dot;
-        if dist_sq < zero {
-            dist_sq = zero; // coincident points + rounding
-        }
-        let den_sq = one - two * dot + a.norm_sq * b.norm_sq;
-
-        // Degenerate |1−āb| ≈ 0 guard, squared-space threshold of the
-        // exact kernel's ε check; also catches rounding-negative values.
-        if den_sq < constants::epsilon() * constants::epsilon() {
-            return cap;
-        }
-
-        let r_sq = dist_sq / den_sq;
-        if r_sq > cap {
-            cap
-        } else {
-            r_sq
-        }
+        hyperbolic_ratio_sq(&a.point, a.norm_sq, &b.point, b.norm_sq)
     }
 
     /// Prune left ⟺ provably `d_q − m > τ` — the tanh subtraction identity
@@ -230,27 +328,13 @@ impl Metric<CachedNormPoint> for HyperbolicMetric {
     /// strictly conservative: it may descend a few percent more than
     /// exact, it can never prune a true neighbor.
     fn prune_left(&self, s_query: FixedPoint, median: FixedPoint, s_worst: FixedPoint) -> bool {
-        let one = FixedPoint::from_int(1);
-        let two = FixedPoint::from_int(2);
-        if s_query <= median {
-            return false; // r_q ≤ r_m — the left ball may contain neighbors
-        }
-        let x_ub = sqrt_upper_bound(s_query * median);
-        let one_minus_x = one - x_ub;
-        s_query + median - two * x_ub > s_worst * (one_minus_x * one_minus_x)
+        s_query > median && sq_ratio_separation_exceeds(s_query, median, s_worst)
     }
 
     /// Prune right ⟺ provably `m − d_q > τ` (same identity, mirrored:
     /// requires `r_m > r_q`, i.e. `median > s_query`).
     fn prune_right(&self, s_query: FixedPoint, median: FixedPoint, s_worst: FixedPoint) -> bool {
-        let one = FixedPoint::from_int(1);
-        let two = FixedPoint::from_int(2);
-        if median <= s_query {
-            return false;
-        }
-        let x_ub = sqrt_upper_bound(s_query * median);
-        let one_minus_x = one - x_ub;
-        s_query + median - two * x_ub > s_worst * (one_minus_x * one_minus_x)
+        median > s_query && sq_ratio_separation_exceeds(median, s_query, s_worst)
     }
 
     /// Heuristic order (squares are monotone — sqrt-free and exact).
