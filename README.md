@@ -86,7 +86,7 @@ miscategorization, visible in geometry and invisible in metadata.
 
 ```toml
 [dependencies]
-horon-engine = "0.4"
+horon-engine = "0.5"
 ```
 
 All arithmetic is [gMath](https://github.com/nierto/gMath) Q64.64 fixed
@@ -220,6 +220,11 @@ Geometric *primitives* run in nanoseconds (grid probe ~15 ns, power distance
 ~24 ns). Full-API queries pay for exact hyperbolic verification of every
 candidate. Concurrent read throughput: ~2.6M reads/sec on 8 threads.
 
+**These rows predate 0.5.0**, whose proxy-space release cut the cost of
+every ranking loop (bulk insert and structural KNN most of all — fresh-tree
+insertion dropped roughly an order of magnitude). Treat the table as an
+upper bound until BENCHMARKS.md is re-measured on the reference machine.
+
 ## Persistence
 
 The engine is in-memory. [Horon](https://github.com/nierto/horon) persists
@@ -253,6 +258,21 @@ Store                         <- public API, all &self, Arc-shareable
 - **[Horon](https://github.com/nierto/horon)**: `.htt` WAL persistence over
   this engine.
 
+## Limits worth knowing
+
+- Depth is a precision budget: Q64.64 supports roughly 44/τ levels before
+  sibling separation degrades near the disk boundary; the engine warns as
+  inserts approach it.
+- Extreme fan-out (on the order of 1000+ siblings under one parent) can
+  quantize to colliding position signatures; insertion probes forward to
+  the next free slot, so placement stays correct but the golden-angle
+  spacing guarantee weakens. Keep realistic tree shapes.
+- Semantic dimensions are capped at 255 per node (16 reserved + up to 239
+  user); distances run over any slice of them.
+- The engine is in-memory and single-process by design — durability,
+  concurrent readers, and the on-disk layout live in
+  [Horon](https://github.com/nierto/horon).
+
 ## Recent work
 
 - **Semantic disk**: the concept taxonomy embedded hyperbolically, positions
@@ -263,6 +283,18 @@ Store                         <- public API, all &self, Arc-shareable
   `find_similar` and `find_outliers`.
 - In [Horon](https://github.com/nierto/horon): temporal epochs (v0.6.0) and
   WAL-based replication (v0.5.0).
+
+## Author
+
+Built by **Niels Erik Toren**. Support addresses and contribution guidelines
+live in the [Horon README](https://github.com/nierto/horon#author--support).
+
+## Disclaimer
+
+This software is provided **"as is"**, without warranty of any kind, express
+or implied. Use of this software is entirely at your own risk. In no event
+shall the author or contributors be held liable for any damages arising from
+the use or inability to use this software.
 
 ## License
 
