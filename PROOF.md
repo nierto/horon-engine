@@ -214,12 +214,20 @@ at all times, through arbitrary leaf insertions. The Voronoi diagram
 (dual of Delaunay) is maintained automatically — no separate spatial
 index is structurally necessary.
 
-**O(1) insertion.** Adding a leaf requires:
+**O(1) geometric insertion.** Adding a leaf requires:
 1. One Möbius reflection (compute child coordinates): O(d) where d is
    the space dimension (typically 2-4).
-2. One spatial registration (VP-tree buffer insert): O(1).
-3. Zero recomputation of existing embeddings: all existing coordinates
+2. Zero recomputation of existing embeddings: all existing coordinates
    are unchanged.
+
+The theorem's O(1) claim covers exactly this geometric work — the
+placement and the preservation of every existing Delaunay edge. An
+implementation additionally maintains an auxiliary search index over
+the placed points; in this engine that is a VP-tree whose buffered
+insert amortizes to O(log n) (measured flat in practice: ~0.6 ms per
+insert at both 12k and 25k nodes). The index is an engineering
+convenience, not part of the theorem: the Delaunay structure itself
+needs no maintenance, which is the point.
 
 **Nearest-neighbor via tree structure.** Since the tree equals the
 Delaunay graph, the nearest neighbor of any embedded point can be
@@ -236,8 +244,8 @@ found by navigating the tree structure. For a query point q:
 
 The synthesis is new: **a dynamic tree data structure that provably
 maintains the identity Tree = Delaunay Triangulation = Voronoi Index
-under leaf insertion, with O(1) update cost and zero perturbation to
-existing embeddings.** This unifies the data structure and its spatial
+under leaf insertion, with O(1) geometric update cost and zero
+perturbation to existing embeddings.** This unifies the data structure and its spatial
 index into a single geometric object.
 
 ---

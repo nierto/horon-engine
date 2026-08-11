@@ -9,7 +9,7 @@ Per-symbol truth: docblocks (`cargo doc --open`). Code wins over docs.
 ```
 Store := in-memory hyperbolic tree-tensor store | Sarkar embedding in the Poincare disk | tree == its own spatial index
 Implements: path-keyed CRUD + spatial k-NN + semantic slice queries via geometric hashing (~61 buckets) + per-bucket VP-trees + Nielsen power diagram
-Maintains: O(1) Delaunay-preserving leaf insertion (PROOF.md); positions are a pure function of the insertion sequence, derived not stored
+Maintains: O(1)-geometric Delaunay-preserving leaf insertion (PROOF.md; index registration amortizes O(log n)); positions are a pure function of the insertion sequence, derived not stored
 Coordinates: g_math Q64.64 fixed point (pinned =0.4.31); persisted by the horon crate; no I/O of its own
 ```
 
@@ -87,7 +87,7 @@ NEVER:     floats in the compute path (owner ruling; API-boundary f64 display va
 
 GUARANTEE: the tree is its own spatial index
 REQUIRES:  tau >= -log(tan(pi / (2 * d_max)))   # Delaunay condition, PROOF.md
-ENSURES:   O(1) Delaunay-preserving leaf insertion; power-diagram point location stays valid
+ENSURES:   O(1)-geometric Delaunay-preserving leaf insertion (index registration amortized O(log n)); power-diagram point location stays valid
 NEVER:     persist positions; geometry is derived state; re-derive by replaying inserts
 
 GUARANTEE: indexed == brute force, byte for byte
