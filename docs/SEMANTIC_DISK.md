@@ -97,11 +97,21 @@ the point-location grid come along unchanged. Because the *sites* are the
 anchors (dozens), not the data nodes (unbounded):
 
 - **`concept_of(key)` — constant-in-data-size classification.** Locate the
-  node's derived position among the anchor cells (power-distance over the
-  anchor sites — linear in the anchor count, i.e. dozens; independent of
-  data-node count). "Which concept does this node belong to right now" is
-  one point location. Compared against the node's storage path, this is
-  miscategorization detection as a primitive.
+  node's derived position among the anchor cells — linear in the anchor
+  count, i.e. dozens; independent of data-node count. "Which concept does
+  this node belong to right now" is one point location. Compared against
+  the node's storage path, this is miscategorization detection as a
+  primitive.
+
+  The cell test is the Nielsen affine reduction of the hyperbolic Voronoi
+  diagram — `argmin_i (1 − ⟨x, k_i⟩)·γ_i` in Klein coordinates, reusing the
+  γ the barycenter already caches. It must be that reduction and **not** the
+  Euclidean power distance `‖x − k_i‖² − (1 − ‖k_i‖²)`: the two agree only
+  when every anchor shares one Klein norm. A flat single-depth spec
+  satisfies that by construction; a **nested** one never does, because
+  Sarkar places deeper concepts further out. Scored the Euclidean way, a
+  shallow anchor swallows a deeper anchor's own site — single-anchor
+  identity breaks and whole subtrees end up owning no territory at all.
 - **Blend behavior, stated honestly:** a *strongly dominant* affinity
   classifies to its dominant concept. A *balanced* blend of two distant
   concepts derives a position in the middle of the disk — and the middle
@@ -170,6 +180,10 @@ same discipline as the dimensional schema itself.
 
 ## Verification
 
+- Classification: single-anchor identity — a pure one-anchor weight vector
+  derives exactly that anchor's site and must classify to it — asserted for
+  a **nested** spec and for a spec whose anchors are each other's
+  ancestors, not only for a flat one.
 - Barycenter: single-anchor identity; two-equal-weights ≈
   `hyperbolic_midpoint` (verified against the gyro-midpoint oracle); weight-scale invariance;
   all results strictly inside the disk.

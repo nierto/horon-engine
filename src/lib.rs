@@ -19,7 +19,9 @@
 //!   queries use lazy per-slice VP-trees above a node floor, a linear scan below —
 //!   see `Store::nearest_semantic` and `docs/SEMANTIC_INDEX.md`).
 //! - **Spatial Queries**: Find nearest neighbors and range queries in hyperbolic space
-//! - **Mathematically Grounded**: Sarkar embedding + Nielsen power diagram (see PROOF.md)
+//! - **Mathematically Grounded**: Sarkar embedding + Nielsen power diagram (see PROOF.md).
+//!   PROOF.md's Delaunay guarantee is conditional on `tau >= -log(tan(pi/(2*d_max)))`;
+//!   the default `tau = 1.0` satisfies it up to `d_max ~= 4.5` (see `StoreConfig::tau`).
 //! - **Deterministic Results**: Q64.64 fixed-point arithmetic for bit-identical results across platforms
 //! - **Extensible**: Modular architecture with pluggable components and extension system
 //!

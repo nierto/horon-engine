@@ -222,3 +222,107 @@ fn explicit_weight_queries_work() {
         "all-zero weights have no position"
     );
 }
+
+/// A nested spec: ten species under three real mammalian clades, dims
+/// 16..26. Sarkar places deeper concepts further from the origin, so these
+/// anchors sit at *unequal* Klein norms — the regime `spec()` above, being
+/// flat and single-depth, cannot reach.
+fn nested_spec() -> Vec<(&'static str, usize)> {
+    vec![
+        ("/laurasiatheria/btaurus", 16),
+        ("/laurasiatheria/clfamiliaris", 17),
+        ("/laurasiatheria/ecaballus", 18),
+        ("/afrotheria/lafricana", 19),
+        ("/primates/mmulatta", 20),
+        ("/glires/mmusculus", 21),
+        ("/glires/ocuniculus", 22),
+        ("/primates/ptroglodytes", 23),
+        ("/glires/rnorvegicus", 24),
+        ("/laurasiatheria/sscrofa", 25),
+    ]
+}
+
+/// An affinity vector putting all weight on one dim (positional from 16).
+fn pure(dim: usize, n: usize) -> Vec<f64> {
+    let mut v = vec![0.0; n];
+    v[dim - 16] = 10.0;
+    v
+}
+
+/// Single-anchor identity: a node whose affinity is entirely on one anchor
+/// derives *exactly* that anchor's site, so it must classify to that
+/// anchor. This is the one case with an unarguable known answer, and it is
+/// what tells a correct cell decomposition from a plausible-looking one.
+///
+/// Regression guard: classification used to score anchors by the Euclidean
+/// power distance `‖x − k‖² − (1 − ‖k‖²)`, which coincides with hyperbolic
+/// nearest-neighbour only when every anchor shares one Klein norm. A flat
+/// spec satisfies that by construction and passed; this nested spec did
+/// not — shallow anchors swallowed deeper anchors' own sites, and two whole
+/// subtrees (primates, afrotheria) owned no territory at all.
+#[test]
+fn single_anchor_identity_holds_for_a_nested_taxonomy() {
+    let store = Store::new();
+    let spec = nested_spec();
+    let disk = SemanticDisk::build(&spec).unwrap();
+    store.put_data_only("/g", b"root").unwrap();
+
+    for (path, dim) in &spec {
+        let key = format!("/g{}", path.replace('/', "_"));
+        add(&store, &key, &pure(*dim, spec.len()));
+        assert_eq!(
+            disk.concept_of(&store, &key).unwrap().unwrap(),
+            *path,
+            "an anchor must own its own site: pure weight on dim {} is {}",
+            dim,
+            path
+        );
+    }
+
+    // Every subtree therefore holds territory — no clade is annihilated.
+    let owned: Vec<String> = spec
+        .iter()
+        .map(|(path, dim)| {
+            let key = format!("/g{}", path.replace('/', "_"));
+            let _ = dim;
+            disk.concept_of(&store, &key).unwrap().unwrap()
+        })
+        .collect();
+    for clade in ["/laurasiatheria/", "/afrotheria/", "/primates/", "/glires/"] {
+        assert!(
+            owned.iter().any(|c| c.starts_with(clade)),
+            "{} owns no cell",
+            clade
+        );
+    }
+}
+
+/// The same identity where an anchor's own *ancestors* are anchors too:
+/// five nodes strung along one branch sit at five different Klein norms,
+/// the sharpest form of the unequal-norm regime.
+#[test]
+fn single_anchor_identity_survives_anchored_ancestors() {
+    let store = Store::new();
+    let spec = vec![
+        ("/a", 16),
+        ("/a/b", 17),
+        ("/a/b/c", 18),
+        ("/a/b/c/d", 19),
+        ("/a/b/c/d/e", 20),
+        ("/x", 21),
+        ("/x/y", 22),
+        ("/x/y/z", 23),
+    ];
+    let disk = SemanticDisk::build(&spec).unwrap();
+    store.put_data_only("/g", b"root").unwrap();
+
+    for (path, dim) in &spec {
+        let key = format!("/g/d{}", dim);
+        add(&store, &key, &pure(*dim, spec.len()));
+        assert_eq!(
+            disk.concept_of(&store, &key).unwrap().unwrap(),
+            *path,
+            "a child must not be swallowed by its own ancestor's cell"
+        );
+    }
+}

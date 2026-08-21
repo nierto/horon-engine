@@ -725,113 +725,109 @@ impl HyperbolicTensorNetwork {
             .collect()
     }
 
-    /// Find the nearest node to an arbitrary point using the power diagram grid.
+    /// Find the nearest node to an arbitrary point.
+    ///
+    /// The point-location grid **proposes**; hyperbolic distance **decides**.
+    /// That split is load-bearing: the grid stores one owner per tile, so a
+    /// node whose power cell is smaller than a tile is unnameable by it, and
+    /// Sarkar placement drives cells below tile size within a few levels.
+    /// Treating a grid hit as the answer therefore returns a confidently
+    /// wrong node — including for a query sitting exactly on a node's own
+    /// position. The VP-tree is consulted on every query, not only when the
+    /// grid misses, so a grid *mistake* is recoverable and not just a grid
+    /// *miss*.
     ///
     /// Algorithm:
     /// 1. Convert Poincaré → Klein coordinates: O(d)
-    /// 2. Grid lookup for candidate: O(1)
-    /// 3. Power-distance pre-filter: rank all tree neighbors by pd (~24ns each)
-    /// 4. Hyperbolic distance verification: only top-K candidates (~59µs each)
-    /// 5. Return true nearest
+    /// 2. Grid lookup, O(1), yielding a cell generator and its tree
+    ///    neighbours — for high-degree nodes, ranked by power distance
+    ///    (~24ns each) and truncated to `VERIFY_K`
+    /// 3. Add the VP-tree's own candidate: O(log n)
+    /// 4. Score every candidate with `hyperbolic_ratio` (measured 23.9µs) and
+    ///    convert the winner once via `ratio_to_distance`, so the costlier
+    ///    `hyperbolic_distance` (measured 37.5µs) is never paid per-candidate
     ///
-    /// Uses hyperbolic_ratio (~200ns) for all comparisons instead of
-    /// hyperbolic_distance (~62µs), computing the full distance only once
-    /// for the final winner. For high-degree nodes, power distance pre-filter
-    /// ranks neighbors at ~24ns each, then ratio-verifies top-K.
+    /// **Complexity**: O(log n), set by the VP-tree consultation in step 3.
+    /// The grid keeps the candidate set small and constant; it does not make
+    /// the query O(1), and it never did — see the tile-resolution note above.
     ///
-    /// Falls back to VP-tree KNN if grid misses.
+    /// **Cost**: ~2.0ms per query, of which ~1.95ms is
+    /// [`HyperbolicHashTable::find_nearest_nodes`] taking a full
+    /// `hyperbolic_distance` to every bucket centre (≈52 buckets × 37.5µs)
+    /// purely to order buckets for its pruning bound. That scan, not this
+    /// function, is the optimization target; `nearest_neighbor_point_k` has
+    /// always paid it, so exactness here costs what exactness already cost
+    /// there.
     pub fn nearest_neighbor_point(&self, query_poincare: &HyperbolicPoint) -> Option<(String, FixedPoint)> {
         if self.klein_points.is_empty() {
             return None;
         }
 
-        // Max neighbors to verify with hyperbolic_ratio after power-distance pre-filter
+        // Max tree neighbors to carry forward from a high-degree grid cell.
         const VERIFY_K: usize = 5;
 
         let query_klein = klein::poincare_to_klein(query_poincare);
 
-        // O(1) grid lookup (read lock — brief, shared with other readers)
+        // --- Propose ---
+        let mut candidates: Vec<String> = Vec::with_capacity(VERIFY_K + 2);
+
         let grid_candidate = self.point_location.read().unwrap_or_else(|e| e.into_inner()).query(&query_klein.coords).map(|s| s.to_string());
-        if let Some(candidate_id) = grid_candidate.as_deref() {
-            // Clone the power cell data we need to avoid holding DashMap guards
-            let cell_data = self.power_cells.get(candidate_id).map(|r| r.value().clone());
-
-            if let Some(cell) = cell_data {
-                let n_neighbors = cell.half_planes.len();
-
-                if n_neighbors <= VERIFY_K {
-                    // Few neighbors: verify all with cheap hyperbolic_ratio
-                    let mut best_id = candidate_id.to_string();
-                    let mut best_ratio = self.point_map.get(candidate_id)
-                        .map(|p| query_poincare.hyperbolic_ratio(p.value()))
-                        .unwrap_or(FixedPoint::from_int(1));
-
+        if let Some(candidate_id) = grid_candidate {
+            match self.power_cells.get(&candidate_id).map(|r| r.value().clone()) {
+                Some(cell) if cell.half_planes.len() > VERIFY_K => {
+                    // High degree: rank by power distance before truncating,
+                    // so the VERIFY_K we keep are the plausible ones.
+                    let mut pd_ranked: Vec<(String, FixedPoint)> =
+                        Vec::with_capacity(cell.half_planes.len() + 1);
+                    if let Some(ck) = self.klein_points.get(&candidate_id) {
+                        pd_ranked.push((
+                            candidate_id.clone(),
+                            klein::power_distance(&query_klein.coords, ck.value()),
+                        ));
+                    }
                     for hp in &cell.half_planes {
-                        if let Some(neighbor_point) = self.point_map.get(&hp.neighbor_id) {
-                            let r = query_poincare.hyperbolic_ratio(neighbor_point.value());
-                            if r < best_ratio {
-                                best_ratio = r;
-                                best_id = hp.neighbor_id.clone();
-                            }
+                        if let Some(nk) = self.klein_points.get(&hp.neighbor_id) {
+                            pd_ranked.push((
+                                hp.neighbor_id.clone(),
+                                klein::power_distance(&query_klein.coords, nk.value()),
+                            ));
                         }
                     }
-
-                    // The winning ratio already determines the exact distance
-                    // (d = 2·atanh(ratio)); no second lookup or sentinel needed,
-                    // and this stays correct even if the winner's point is
-                    // concurrently removed after selection.
-                    return Some((best_id, ratio_to_distance(best_ratio)));
+                    pd_ranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                    candidates.extend(pd_ranked.into_iter().take(VERIFY_K).map(|(id, _)| id));
                 }
-
-                // Many neighbors: power-distance pre-filter (O(d_max × 24ns))
-                let candidate_klein = self.klein_points.get(candidate_id).map(|r| r.value().clone());
-                let mut pd_ranked: Vec<(String, FixedPoint)> = Vec::with_capacity(n_neighbors + 1);
-
-                if let Some(ref ck) = candidate_klein {
-                    pd_ranked.push((candidate_id.to_string(), klein::power_distance(&query_klein.coords, ck)));
+                Some(cell) => {
+                    candidates.push(candidate_id);
+                    candidates.extend(cell.half_planes.iter().map(|hp| hp.neighbor_id.clone()));
                 }
-
-                for hp in &cell.half_planes {
-                    if let Some(nk) = self.klein_points.get(&hp.neighbor_id) {
-                        pd_ranked.push((hp.neighbor_id.clone(), klein::power_distance(&query_klein.coords, nk.value())));
-                    }
-                }
-
-                pd_ranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-                // Verify top-K with cheap hyperbolic_ratio
-                let mut best_id = String::new();
-                let mut best_ratio = FixedPoint::from_int(1);
-
-                for (id, _pd) in pd_ranked.iter().take(VERIFY_K) {
-                    if let Some(point) = self.point_map.get(id) {
-                        let r = query_poincare.hyperbolic_ratio(point.value());
-                        if r < best_ratio {
-                            best_ratio = r;
-                            best_id = id.clone();
-                        }
-                    }
-                }
-
-                if !best_id.is_empty() {
-                    // Exact distance from the winning ratio (see above).
-                    return Some((best_id, ratio_to_distance(best_ratio)));
-                }
-            } else {
-                if let Some(candidate_point) = self.point_map.get(candidate_id) {
-                    let dist = query_poincare.hyperbolic_distance(candidate_point.value());
-                    return Some((candidate_id.to_string(), dist));
-                }
+                None => candidates.push(candidate_id),
             }
         }
 
-        // Fallback: use VP-tree KNN (O(log n) per bucket)
-        let results = self.hash_table.find_nearest_nodes(query_poincare, 1);
-        if let Some((id, dist)) = results.into_iter().next() {
-            return Some((id, dist));
-        }
+        // Always, not only on a grid miss: the grid can name the wrong cell,
+        // and its generator's tree neighbours need not include the true
+        // nearest node.
+        candidates.extend(
+            self.hash_table
+                .find_nearest_nodes(query_poincare, 1)
+                .into_iter()
+                .map(|(id, _)| id),
+        );
 
-        None
+        // --- Decide ---
+        // `hyperbolic_ratio` is monotone in hyperbolic distance, so the
+        // argmin is the true nearest among the candidates. The winning ratio
+        // already determines the exact distance (d = 2·atanh(ratio)), which
+        // stays correct even if the winner is concurrently removed.
+        let mut best: Option<(String, FixedPoint)> = None;
+        for id in candidates {
+            let Some(point) = self.point_map.get(&id) else { continue };
+            let ratio = query_poincare.hyperbolic_ratio(point.value());
+            if best.as_ref().map_or(true, |(_, incumbent)| ratio < *incumbent) {
+                best = Some((id, ratio));
+            }
+        }
+        best.map(|(id, ratio)| (id, ratio_to_distance(ratio)))
     }
 
     /// Find the k nearest stored nodes to an arbitrary Poincaré disk point.

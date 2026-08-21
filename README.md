@@ -113,7 +113,7 @@ Per-symbol truth lives in the docblocks: `cargo doc --open`.
 | `children(path)` | List direct children. |
 | `list(prefix)` | List the full subtree. |
 | `set_meta(key, k, v)` / `get_meta(key)` | Per-node key-value metadata. |
-| `nearest(coords)` | Nearest node to a point: O(1) power-diagram grid probe plus candidate verification. |
+| `nearest(coords)` | True nearest node to a point. O(log n): the grid proposes candidates, hyperbolic distance decides. |
 | `nearest_k(coords, k)` | The k nearest nodes to a point. |
 | `neighbors(key, k)` | The k nearest neighbors of a stored node. |
 | `find_within(key, r)` | All nodes within hyperbolic radius r. |
@@ -182,12 +182,18 @@ understand hierarchy. Five mechanisms remove the choice:
 1. **Sarkar embedding.** Every node gets a position in the Poincare disk;
    children sit at hyperbolic distance tau from their parent via Mobius
    reflection. The tree *is* its own spatial index.
-2. **Geometric hashing.** ~61 fixed buckets partition the disk by distance
-   from origin. Path lookups are O(1) HashMap access.
+2. **Path lookup.** Path to node is an O(1) HashMap access, independent of
+   the spatial index. Nodes are additionally sharded into ~61 fixed buckets
+   backing the VP-tree layer; that partition does not track hyperbolic growth,
+   so occupancy is uneven and query *cost* suffers. Query *results* do not
+   depend on it.
 3. **Per-bucket VP-trees.** Range and KNN queries in O(log n) under the
    hyperbolic metric.
-4. **Nielsen power diagram.** A Poincare-to-Klein projection gives O(1)
-   nearest-neighbor via a uniform grid, verified with exact distances.
+4. **Nielsen power diagram.** A Poincare-to-Klein projection and a uniform
+   grid propose candidates for point location. The grid is an accelerator, not
+   an oracle: it holds one owner per tile and Sarkar drives cells below tile
+   size within a few levels, so the answer is always decided by hyperbolic
+   distance.
 5. **Semantic dimensions.** Orthogonal to the spatial embedding: Euclidean
    distance over user-defined dimension slices, no tree change required.
 
@@ -197,6 +203,26 @@ All geometry is gMath Q64.64 fixed point. There are no floats in the compute
 path. The same operation sequence produces bit-identical state on any
 platform; that property is what lets a write-ahead log double as a
 replication protocol. CI runs the suite on x86-64 and arm64.
+
+## Current limitations
+
+Stated plainly, because they affect how you should configure the engine.
+
+- **`tau` must scale with fan-out.** PROOF.md's Delaunay guarantee holds only
+  when `tau >= -log(tan(pi / (2 * d_max)))` for the tree's maximum node degree.
+  The default `tau = 1.0` satisfies that up to `d_max ~= 4.5`. Beyond it the
+  tree is still embedded, queried and returned correctly — it is simply outside
+  the proven regime. Set it with `StoreConfig::tau()` for wider trees.
+
+- **Depth is bounded by precision, not by the format.** A node sits at
+  hyperbolic radius `depth * tau`, and the Q64.64 distance kernel holds metric
+  fidelity to a radius of about 17.5 (saturating near 22). So `tau = 1.0` gives
+  usable depth ~17, and raising `tau` for wider trees lowers reachable depth
+  proportionally.
+
+- **`nearest` is O(log n), not O(1).** The point-location grid cannot name a
+  node whose power cell is smaller than a grid tile, which Sarkar placement
+  causes within a few levels. The grid proposes candidates only.
 
 ## Performance
 
@@ -248,7 +274,7 @@ Store                         <- public API, all &self, Arc-shareable
             └─ HyperbolicTensorNetwork  <- Sarkar embedding, spatial index
                  ├─ HyperbolicHashTable  <- ~61 buckets, per-bucket VP-trees
                  ├─ PoincareDisk         <- hyperbolic geometry, Mobius transforms
-                 └─ PointLocationGrid    <- Nielsen power diagram point location
+                 └─ PointLocationGrid    <- candidate proposer (not an oracle)
 ```
 
 ## Ecosystem

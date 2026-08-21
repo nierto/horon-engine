@@ -335,7 +335,14 @@ impl HTTStorage {
 
     /// Find the nearest stored node to an arbitrary point in the Poincaré disk.
     ///
-    /// Uses the Nielsen power diagram for O(1) point location.
+    /// The power-diagram grid supplies candidates in O(1); the answer is
+    /// then decided by hyperbolic distance against the VP-tree's candidate
+    /// as well, so the result is the true nearest node.
+    ///
+    /// **Complexity**: O(log n). The grid alone cannot decide the query —
+    /// it holds one owner per tile, and Sarkar placement drives power cells
+    /// below tile size within a few levels, so a grid hit may name a node
+    /// that is not nearest.
     /// Coordinates are in f32 (user-facing boundary); converted internally to FixedPoint.
     /// Returns (path, hyperbolic_distance_as_FixedPoint).
     pub fn nearest_neighbor_point(&self, coords: &[FixedPoint]) -> IntegrationResult<(String, FixedPoint)> {

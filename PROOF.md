@@ -250,6 +250,52 @@ index into a single geometric object.
 
 ---
 
+## Implementation status (horon-engine 0.5.2)
+
+The theorem above is a statement about Sarkar's construction under its
+hypothesis. This section records, without softening, where the shipped
+implementation stands relative to that hypothesis. Every figure is measured.
+
+**The tau hypothesis is declared but not enforced.** The theorem requires
+`tau >= -log(tan(pi / (2 * d_max')))`. The engine ships a fixed
+`tau = 1.0`, which satisfies the bound only up to `d_max ~= 4.46`:
+
+| d_max | tau required | max depth at that tau |
+|-------|--------------|-----------------------|
+| 4     | 0.881        | 19.9                  |
+| 6     | 1.317        | 13.3                  |
+| 16    | 2.318        | 7.6                   |
+| 256   | 5.094        | 3.4                   |
+
+Rainbow fan-out deliberately supports 256 children per node, which would
+require `tau >= 5.094`. `tau` is settable via `StoreConfig::tau()`, but
+nothing derives it from the tree's degree or warns when the bound is
+violated.
+
+**The cone construction is not implemented.** Child angles are a golden-angle
+sequence over the full 2*pi (`tensor_network.rs`, `compute_child_placement`),
+not confined to the cone facing away from the grandparent. Cone containment is
+what Lemma 2 uses to keep subtree Voronoi cells disjoint, so without it the
+conclusion does not follow. Measured on a 43-node tree: **21 nodes have a
+nearest neighbour that is not a tree neighbour**. Since the Delaunay graph
+always contains the nearest-neighbour graph, Tree = Delaunay does not hold in
+the shipped embedding.
+
+**The max depth column above is a precision bound, not a format bound.** A node
+sits at hyperbolic radius `depth * tau`, and in Q64.64 the distance kernel
+holds fidelity to a radius of about 17.5 and saturates near 22 — because
+`||p - q||^2` underflows once `||p - q|| < 2^-32`. This is independent of tau:
+the same budget is spent faster at larger tau.
+
+**What this does and does not affect.** Query *results* are unaffected: the
+engine decides every spatial query by hyperbolic distance against a metric
+index, never by the Delaunay identity. What is affected is the claim that the
+tree *is* its own spatial index — today it is not, and the accompanying
+`power diagram = point location` fast path is an accelerator whose proposals
+must be verified.
+
+---
+
 ## References
 
 - Sarkar, R. (2011). Low Distortion Delaunay Embedding of Trees in

@@ -46,7 +46,7 @@ children(path) -> Vec<String> | list(prefix) -> Vec<String>
 set_meta(key, k, v) | get_meta(key) -> HashMap<String, String>
 set_semantic(key, Vec<u8>) | get_semantic(key) -> Vec<u8>
   # raw Q64.64 LE, 16 B/dim; all-zero = "not set" sentinel, rejected
-nearest(&[FixedPoint]) -> (String, FixedPoint)   # O(1) power-diagram probe + exact verification
+nearest(&[FixedPoint]) -> (String, FixedPoint)   # O(log n); grid probe proposes, hyperbolic distance decides (exact)
 nearest_k(coords, k) -> Vec<(String, FixedPoint)>          # bucketed VP-tree path
 neighbors(key, k) -> Vec<String> | find_within(key, radius) -> Vec<String>
 position(key) -> Vec<FixedPoint>                 # errors for unknown or data-only keys
@@ -87,7 +87,8 @@ NEVER:     floats in the compute path (owner ruling; API-boundary f64 display va
 
 GUARANTEE: the tree is its own spatial index
 REQUIRES:  tau >= -log(tan(pi / (2 * d_max)))   # Delaunay condition, PROOF.md
-ENSURES:   O(1)-geometric Delaunay-preserving leaf insertion (index registration amortized O(log n)); power-diagram point location stays valid
+ENSURES:   O(1)-geometric Delaunay-preserving leaf insertion (index registration amortized O(log n))
+UNENFORCED: the REQUIRES tau bound is not checked; default tau=1.0 holds only to d_max~=4.5, and the cone construction the proof assumes is not implemented -- queries stay exact, the Delaunay identity does not
 NEVER:     persist positions; geometry is derived state; re-derive by replaying inserts
 
 GUARANTEE: indexed == brute force, byte for byte

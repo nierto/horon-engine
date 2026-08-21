@@ -1,8 +1,17 @@
 //! klein.rs — Klein Projective Model + Nielsen Power Diagram
 //!
 //! Implements the Klein model of hyperbolic space, the Nielsen reduction
-//! (hyperbolic Voronoi = Euclidean power diagram), and a uniform grid
-//! for O(1) point location.
+//! (hyperbolic Voronoi = Euclidean power diagram), and a uniform grid used
+//! to propose candidates for point location.
+//!
+//! Two limits are load-bearing for callers of this module:
+//! - [`power_distance`] is the *Euclidean* power distance. It coincides with
+//!   the hyperbolic Voronoi diagram only when every site shares one Klein
+//!   norm; for sites at differing norms the exact reduction is
+//!   `argmin_i (1 - <x, k_i>) * gamma_i` (see `semantic_disk::classify_point`).
+//! - [`PointLocationGrid`] holds one owner per tile, and Sarkar placement
+//!   drives power cells below tile size within a few levels. A grid hit is a
+//!   candidate, never an answer; callers must decide with hyperbolic distance.
 //!
 //! Mathematical foundation:
 //! - Klein map: x_K = 2·x_P / (1 + ||x_P||²)

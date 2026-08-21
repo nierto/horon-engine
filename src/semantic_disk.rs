@@ -13,9 +13,9 @@
 //!
 //! Three query families fall out:
 //! - [`SemanticDisk::concept_of`] — which concept does this node belong to
-//!   *right now* (power-distance cell location among the anchors; constant
-//!   in data-node count). Compared with the node's storage path, this is
-//!   miscategorization detection as a primitive.
+//!   *right now* (hyperbolic Voronoi cell location among the anchors;
+//!   constant in data-node count). Compared with the node's storage path,
+//!   this is miscategorization detection as a primitive.
 //! - [`SemanticDisk::nearest`] — k nearest data nodes in meaning-space
 //!   (hyperbolic distance between derived positions; the semantic index's metric tree with
 //!   [`crate::metric_tree::HyperbolicMetric`], epoch-cached).
@@ -151,8 +151,9 @@ impl SemanticDisk {
     }
 
     /// Which concept a node belongs to **right now**: the anchor whose
-    /// power cell contains the node's derived position. Constant in
-    /// data-node count (linear only in the anchor count — dozens).
+    /// hyperbolic Voronoi cell contains the node's derived position.
+    /// Constant in data-node count (linear only in the anchor count —
+    /// dozens).
     /// `Ok(None)` when the node has no concept position.
     ///
     /// Compared against the node's storage path, this is the
@@ -306,12 +307,46 @@ impl SemanticDisk {
         Some(klein::klein_to_poincare(&KleinPoint::new(coords)))
     }
 
-    /// Power-distance cell location among the anchor sites.
+    /// Hyperbolic Voronoi cell location among the anchor sites.
+    ///
+    /// The cell of anchor *i* is `{x : d_H(x, k_i) ≤ d_H(x, k_j) ∀ j}`. In
+    /// Klein coordinates
+    ///
+    /// ```text
+    /// cosh d_H(x, k_i) = (1 − ⟨x, k_i⟩) · γ_i / √(1 − ‖x‖²),   γ_i = 1/√(1 − ‖k_i‖²)
+    /// ```
+    ///
+    /// and the `√(1 − ‖x‖²)` factor is common to every anchor, so the cell is
+    /// decided by `argmin_i (1 − ⟨x, k_i⟩)·γ_i` — the Nielsen affine
+    /// reduction of the hyperbolic Voronoi diagram, reusing the same cached
+    /// γ the barycenter already needs. One dot product per anchor: no sqrt,
+    /// no division, the same cost class as the Euclidean power distance it
+    /// replaced, and exact for **any** anchor placement.
+    ///
+    /// Anchors sitting at unequal Klein norms — which is every nested
+    /// taxonomy, since Sarkar places deeper concepts further out — are why
+    /// this has to be the true reduction. Scoring them by
+    /// `‖x − k_i‖² − (1 − ‖k_i‖²)` instead agrees with `d_H` only when all
+    /// γ_i are equal (a flat, single-depth spec); otherwise a shallow anchor
+    /// can swallow a deeper anchor's own site, breaking single-anchor
+    /// identity.
+    ///
+    /// Ties keep the first anchor in canonical path order (deterministic).
     fn classify_point(&self, point: &HyperbolicPoint) -> Option<String> {
         let query = klein::poincare_to_klein(point);
-        let sites: Vec<KleinPoint> = self.anchors.iter().map(|a| a.site.clone()).collect();
-        klein::nearest_by_power_distance(&query.coords, &sites)
-            .map(|(i, _)| self.anchors[i].path.clone())
+        let one = FixedPoint::from_int(1);
+        let mut best: Option<(usize, FixedPoint)> = None;
+        for (i, a) in self.anchors.iter().enumerate() {
+            let score = (one - query.coords.dot(&a.site.coords)) * a.gamma;
+            let better = match &best {
+                None => true,
+                Some((_, incumbent)) => score < *incumbent,
+            };
+            if better {
+                best = Some((i, score));
+            }
+        }
+        best.map(|(i, _)| self.anchors[i].path.clone())
     }
 
     /// The derived-position NN index, rebuilt lazily when the data store's
