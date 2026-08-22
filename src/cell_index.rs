@@ -694,6 +694,123 @@ mod tests {
         }
     }
 
+    /// The index is shared across threads behind `&self`, so insert, query and
+    /// remove interleave with no outer lock. This asserts the three things that
+    /// could go wrong: a deadlock (the test would hang), a lost or duplicated
+    /// node, and a query returning something that was never inserted.
+    ///
+    /// Threads own disjoint id ranges, so each thread's own bookkeeping is
+    /// independent of the others and the assertions stay deterministic under
+    /// any interleaving.
+    ///
+    /// This existed only as a throwaway prototype while the index was being
+    /// built. It is permanent now: `cell_index` answers every spatial read, and
+    /// a sharded structure that loses a node under contention would do so
+    /// silently.
+    #[test]
+    fn concurrent_insert_query_and_remove_stay_coherent() {
+        use std::sync::Arc;
+        use std::thread;
+
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 200;
+
+        // Spread ids over distinct radii and angles so threads touch many
+        // different cells rather than piling into one.
+        fn site(t: usize, i: usize) -> HyperbolicPoint {
+            let radius = 0.05 + 0.9 * (((t * 7 + i) % 20) as f64) / 20.0;
+            let angle = 0.37 * (i as f64) + 0.11 * (t as f64);
+            point(radius * angle.cos(), radius * angle.sin())
+        }
+
+        let index = Arc::new(CellIndex::default());
+
+        // --- concurrent inserts ---------------------------------------------
+        let mut handles = Vec::new();
+        for t in 0..THREADS {
+            let idx = Arc::clone(&index);
+            handles.push(thread::spawn(move || {
+                for i in 0..PER_THREAD {
+                    idx.insert(&format!("t{t}n{i}"), &site(t, i));
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("insert thread panicked");
+        }
+        assert_eq!(
+            index.len(),
+            THREADS * PER_THREAD,
+            "concurrent inserts lost or duplicated nodes",
+        );
+
+        // --- readers and writers together -----------------------------------
+        // Half the threads churn their own range; half only read. A reader must
+        // never see an id that was never inserted, whatever the writers do.
+        let mut handles = Vec::new();
+        for t in 0..THREADS {
+            let idx = Arc::clone(&index);
+            handles.push(thread::spawn(move || -> usize {
+                let mut seen = 0usize;
+                if t % 2 == 0 {
+                    // writer: remove its odd entries, then put them back
+                    for i in (1..PER_THREAD).step_by(2) {
+                        idx.remove(&format!("t{t}n{i}"));
+                    }
+                    for i in (1..PER_THREAD).step_by(2) {
+                        idx.insert(&format!("t{t}n{i}"), &site(t, i));
+                    }
+                } else {
+                    // reader: hammer both query paths while that happens
+                    for i in 0..PER_THREAD {
+                        let q = site(t, i);
+                        for (id, _) in idx.knn(&q, 5) {
+                            assert!(
+                                id.starts_with('t') && id.contains('n'),
+                                "query returned an id that was never inserted: {id}",
+                            );
+                            seen += 1;
+                        }
+                        let r = FixedPoint::from_f64(0.5);
+                        for (id, _) in idx.within_radius(&q, r) {
+                            assert!(
+                                id.starts_with('t'),
+                                "radius query returned a foreign id: {id}",
+                            );
+                        }
+                    }
+                }
+                seen
+            }));
+        }
+        let seen: usize = handles
+            .into_iter()
+            .map(|h| h.join().expect("worker thread panicked"))
+            .sum();
+        assert!(seen > 0, "readers observed nothing at all");
+
+        // Writers restored everything they removed, so the population is intact.
+        assert_eq!(
+            index.len(),
+            THREADS * PER_THREAD,
+            "churn under contention changed the population",
+        );
+
+        // --- every survivor is still locatable at its own position ----------
+        for t in 0..THREADS {
+            for i in (0..PER_THREAD).step_by(37) {
+                let q = site(t, i);
+                let hit = index.knn(&q, 1);
+                assert!(!hit.is_empty(), "t{t}n{i} vanished from the index");
+                assert_eq!(
+                    hit[0].1,
+                    FixedPoint::from_int(0),
+                    "querying at a node's own position must return distance 0",
+                );
+            }
+        }
+    }
+
     /// A radius so large it cannot be expressed in `cosh` space must return
     /// everything, not panic.
     ///
