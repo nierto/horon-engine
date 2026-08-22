@@ -54,20 +54,41 @@ inputs stays zero, and `ensure_in_disk` scales uniformly. By induction every
 structural point has dims ≥2 exactly zero, at any depth, for any tree. Measured
 across 1 281 nodes in four tree shapes: zero off-plane components.
 
-So a `HyperbolicPoint` allocated `dimension` wide uses two of them. At the
-`dimension = 23` some deployments use, that is 368 B per point of which 336 B
-are structurally zero. **This is unused width in the structural point — not
-discarded semantic data.** Semantic capacity is `semantic_dims`, a different
-field, and it is unaffected.
+So a `HyperbolicPoint` allocated `dimension` wide uses two of them.
 
-Two consequences worth separating:
+**How much that actually costs — corrected 2026-08-22.** An earlier revision of
+this document put the figure at 368 B per point (336 B zero) "at the
+`dimension = 23` some deployments use". **Nothing sets 23.** `Store` hardcodes
+`dimension: 4` in `to_htt_config` (`store.rs`), and `horon` writes `dimension:
+4` in its header (`file.rs`). A power user can pass a wider value by building
+an `HTTStorageConfig` directly, but no path in either crate does.
 
-- **Memory**: 368 MB vs 32 MB at 1M nodes. Fixable by storing structural points
-  at width 2 internally while keeping `dimension` in the header and API — a
-  breaking change, since it alters what a public parameter means.
-- **The bucket layer**: `1 + 14 × dimension` buckets, so 57 at the default 4 but
-  323 at 23, and each query sorted all of them with the exact kernel. Removed in
-  0.6.0 — the cell index has no per-dimension term.
+The real figure is therefore **32 B wasted per point out of 64** — two unused
+dimensions at 16 B each, or ~32 MB at a million nodes. Real, but an order of
+magnitude smaller than previously stated, and it does not on its own justify a
+breaking change.
+
+**This is unused width in the structural point — not discarded semantic data.**
+Semantic capacity is `semantic_dims`, a different field, up to 255, and every
+one of those dimensions is stored and meaningful.
+
+Why not simply narrow structural points to width 2:
+
+- `Store::position()` returns `dimension` coordinates and callers depend on the
+  count — `horon`'s `tests/api_surface.rs` asserts `pos.len() == 4`. Narrowing
+  changes a public return shape, not just an internal buffer.
+- It makes `dimension` a parameter that no longer describes what it names,
+  which deepens the naming problem rather than fixing it. The honest fix is to
+  settle what `dimension` *means* (a placement-space width that only ever uses
+  two) before changing what it allocates.
+- The often-cited counter-argument — "you would migrate twice if 3-D placement
+  lands" — is **weaker than it sounds** and should not be leaned on: structural
+  positions are derived, never serialized, so there is no data migration at
+  all, only a code change.
+
+(The bucket layer also scaled with `dimension`: `1 + 14 × dimension` buckets,
+each sorted with the exact kernel on every query. Removed in 0.6.0 — the cell
+index has no per-dimension term.)
 
 ---
 
