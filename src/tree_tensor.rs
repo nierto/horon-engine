@@ -1,8 +1,8 @@
 //! tree_tensor.rs - Hyperbolic Tree Tensor Core Implementation
 //!
-//! Efficient hierarchical data representation combining hyperbolic geometry
-//! and geometric hashing: path lookups are hash-map access, spatial queries
-//! go through the bucketed VP-tree index (see per-method docs for costs).
+//! Efficient hierarchical data representation: path lookups are hash-map
+//! access, spatial queries go through the cell index (see per-method docs on
+//! `Store` for costs).
 
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
@@ -127,8 +127,6 @@ pub struct HTTConfig {
     cache_size: usize,
     /// Sarkar embedding scale factor τ: parent-child hyperbolic distance
     tau: g_math::fixed_point::FixedPoint,
-    /// Point location grid resolution (0 = use default of 64)
-    grid_resolution: usize,
 }
 
 impl HTTConfig {
@@ -139,7 +137,6 @@ impl HTTConfig {
             max_memory_nodes,
             cache_size,
             tau: crate::constants::default_tau(),
-            grid_resolution: 0,
         }
     }
 
@@ -150,7 +147,6 @@ impl HTTConfig {
             max_memory_nodes: 1000,
             cache_size: 100,
             tau: crate::constants::default_tau(),
-            grid_resolution: 0,
         }
     }
 
@@ -158,17 +154,6 @@ impl HTTConfig {
     pub fn with_tau(mut self, tau: g_math::fixed_point::FixedPoint) -> Self {
         self.tau = tau;
         self
-    }
-
-    /// Set the point location grid resolution.
-    pub fn with_grid_resolution(mut self, resolution: usize) -> Self {
-        self.grid_resolution = resolution;
-        self
-    }
-
-    /// Get the grid resolution (0 = use default).
-    pub fn grid_resolution(&self) -> usize {
-        self.grid_resolution
     }
 
     /// Get the dimension.
@@ -200,10 +185,9 @@ impl Default for HTTConfig {
 
 /// Hyperbolic Tree Tensor - core data structure.
 ///
-/// Combines hyperbolic geometry, tensor networks, and geometric hashing:
-/// path access is hash-map cost, spatial queries use the bucketed VP-tree
-/// index. Nodes are embedded in the Poincare disk with spatial indexing
-/// for geometric queries.
+/// Path access is hash-map cost; spatial queries go through the cell index.
+/// Nodes are embedded in the Poincare disk, and their positions are derived
+/// from tree shape rather than stored.
 ///
 /// Path maps use DashMap for lock-free concurrent reads.
 pub struct HyperbolicTreeTensor {
@@ -225,12 +209,7 @@ pub struct HyperbolicTreeTensor {
 impl HyperbolicTreeTensor {
     /// Create a new Hyperbolic Tree Tensor.
     pub fn new(config: HTTConfig) -> Self {
-        let grid_res = config.grid_resolution();
-        let tensor_network = if grid_res > 0 {
-            HyperbolicTensorNetwork::with_grid_resolution(config.dimension(), config.tau(), grid_res)
-        } else {
-            HyperbolicTensorNetwork::new(config.dimension(), config.tau())
-        };
+        let tensor_network = HyperbolicTensorNetwork::new(config.dimension(), config.tau());
 
         Self {
             tensor_network,
@@ -247,9 +226,9 @@ impl HyperbolicTreeTensor {
     /// Returns `Ok(None)` for a root insert (parent path is `None`, i.e. the
     /// path is `/`), `Ok(Some(sig))` when the parent exists, and
     /// `Err(NotFound)` when a non-root node's parent is absent. The last case
-    /// is the important one: `add_node` treats a `None` parent as a root and
-    /// rebuilds the point-location grid, so silently passing `None` for a
-    /// missing parent would wipe the spatial index.
+    /// is the important one: `add_node` places a `None`-parent node at the
+    /// disk origin as a root, so silently passing `None` for a missing parent
+    /// would stack unrelated subtrees on top of each other at the centre.
     fn resolve_parent(
         &self,
         path: &str,
@@ -336,7 +315,7 @@ impl HyperbolicTreeTensor {
 
         // Look up the parent signature (lock-free DashMap read). A non-root
         // node whose parent is absent is rejected — silently treating it as a
-        // second root would wipe the point-location grid.
+        // second root would place it at the origin, on top of the real root.
         let parent_signature = self.resolve_parent(path, &parent_path)?;
 
         // Acquire stripe lock on parent to serialize sibling creation.
@@ -834,8 +813,8 @@ impl HyperbolicTreeTensor {
 
     /// Find the nearest stored node to an arbitrary Poincaré disk point.
     ///
-    /// Uses the Nielsen power diagram grid for O(1) lookup.
-    /// Returns (path, hyperbolic_distance).
+    /// Answered exactly by the cell index. Returns (path, hyperbolic_distance).
+    /// Errors when the index holds nothing.
     pub fn nearest_neighbor_point(&self, query: &super::hyperbolic_geometry::HyperbolicPoint) -> IntegrationResult<(String, g_math::fixed_point::FixedPoint)> {
         let (uid, dist) = self.tensor_network
             .nearest_neighbor_point(query)
@@ -854,7 +833,15 @@ impl HyperbolicTreeTensor {
     /// Find the k nearest stored nodes to an arbitrary Poincaré disk point.
     ///
     /// Returns `(path, hyperbolic_distance)` sorted by ascending distance.
+    ///
+    /// `k == 0` is a request for nothing and is answered with nothing — the
+    /// same as [`Self::find_nearest`]. Only an index that holds no nodes is an
+    /// error. Conflating the two used to make `nearest_k(q, 0)` report "no
+    /// nodes in tree" against a fully populated store, which is simply untrue.
     pub fn nearest_neighbor_point_k(&self, query: &super::hyperbolic_geometry::HyperbolicPoint, k: usize) -> IntegrationResult<Vec<(String, g_math::fixed_point::FixedPoint)>> {
+        if k == 0 {
+            return Ok(Vec::new());
+        }
         let results = self.tensor_network.nearest_neighbor_point_k(query, k);
         if results.is_empty() {
             return Err(IntegrationError::OperationFailed(
@@ -890,8 +877,7 @@ impl HyperbolicTreeTensor {
 
         let results = self
             .tensor_network
-            .hash_table()
-            .find_nearest_nodes(&point, k + 1); // +1 to exclude self
+            .nearest_neighbor_point_k(&point, k + 1); // +1 to exclude self
 
         let mut paths = Vec::new();
         for (uid, dist) in results {
@@ -983,8 +969,7 @@ impl HyperbolicTreeTensor {
 
         let results = self
             .tensor_network
-            .hash_table()
-            .find_nodes_in_radius(&point, radius);
+            .nodes_in_radius(&point, radius);
 
         let mut paths = Vec::new();
         for (uid, dist) in results {

@@ -3,21 +3,20 @@
 //! This module implements the core data network over hyperbolic space:
 //!
 //! - Nodes embedded in the Poincaré disk with parent-child geometric relationships
-//! - O(1) spatial lookups via the hash table's bucket structure
 //! - Exact storage of node data (metadata + raw value bytes)
-//! - Spatial index for range and nearest-neighbor queries
+//! - Spatial queries (nearest, k-nearest, range) delegated to `cell_index`
 
 use std::collections::HashMap;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Debug, Formatter};
 use std::ops::Range;
-use std::sync::{Mutex, RwLock};
+use std::sync::Mutex;
 use dashmap::DashMap;
 use g_math::fixed_point::{FixedPoint, FixedVector};
-use super::hyperbolic_geometry::{HyperbolicPoint, ratio_to_distance};
-use super::hash_table::{GeometricSignature, HyperbolicHashTable};
-use super::klein::{self, KleinPoint, PowerCell, PointLocationGrid};
+use super::hyperbolic_geometry::{PoincareDisk, HyperbolicPoint};
+use super::hash_table::GeometricSignature;
 use crate::constants;
+use crate::cell_index::CellIndex;
 use crate::metric_tree::EuclideanMetric;
 use crate::semantic_index::SemanticIndexCache;
 
@@ -168,8 +167,12 @@ impl CompressedNode {
 /// Internal maps use DashMap for lock-free concurrent reads, preparing
 /// for multi-threaded access in later phases.
 pub struct HyperbolicTensorNetwork {
-    /// Hyperbolic hash table for O(1) spatial lookups
-    hash_table: HyperbolicHashTable,
+    /// The disk these points live in: dimension and the origin. Geometry
+    /// only — it holds no nodes.
+    poincare_disk: PoincareDisk,
+    /// The spatial index. Every spatial read is answered here, exactly, by
+    /// expanding rings until a proven lower bound rules out the rest.
+    cell_index: CellIndex,
     /// Nodes mapped by their unique_id
     nodes: DashMap<String, CompressedNode>,
     /// Points in the Poincaré disk for each node (keyed by unique_id)
@@ -180,28 +183,14 @@ pub struct HyperbolicTensorNetwork {
     tau: FixedPoint,
     /// Per-parent child count for Sarkar cone angular placement
     child_counts: DashMap<String, u32>,
-    /// Klein model points: unique_id → KleinPoint (Nielsen power diagram)
-    klein_points: DashMap<String, KleinPoint>,
-    /// Power cells: unique_id → PowerCell (Voronoi regions in Klein model)
-    power_cells: DashMap<String, PowerCell>,
-    /// Point location grid for O(1) nearest-neighbor queries (RwLock: brief write hold on insert/delete)
-    point_location: RwLock<PointLocationGrid>,
     /// Lazy per-slice VP-tree cache for semantic KNN, invalidated by a
     /// semantic-epoch counter (see `docs/SEMANTIC_INDEX.md`)
     semantic_index: SemanticIndexCache,
 }
 
 impl HyperbolicTensorNetwork {
-    /// Default grid resolution for the point location grid.
-    const DEFAULT_GRID_RESOLUTION: usize = 64;
-
     /// Create a new hyperbolic tensor network with the given Sarkar scale factor τ.
     pub fn new(dimension: usize, tau: FixedPoint) -> Self {
-        Self::with_grid_resolution(dimension, tau, Self::DEFAULT_GRID_RESOLUTION)
-    }
-
-    /// Create a new network with a specific grid resolution.
-    pub fn with_grid_resolution(dimension: usize, tau: FixedPoint, grid_resolution: usize) -> Self {
         // Semantic coordinates and persisted geometry assume a 16-byte Q64.64
         // FixedPoint. GMATH_PROFILE is a build-time env var, so a rebuild under
         // a different profile would silently reinterpret those bytes — fail
@@ -212,18 +201,14 @@ impl HyperbolicTensorNetwork {
              rebuild with the correct profile"
         );
 
-        let hash_table = HyperbolicHashTable::new(dimension);
-
         Self {
-            hash_table,
+            poincare_disk: PoincareDisk::new(dimension),
+            cell_index: CellIndex::default(),
             nodes: DashMap::new(),
             point_map: DashMap::new(),
             root_signature: Mutex::new(None),
             tau,
             child_counts: DashMap::new(),
-            klein_points: DashMap::new(),
-            power_cells: DashMap::new(),
-            point_location: RwLock::new(PointLocationGrid::with_dimension(grid_resolution, dimension)),
             semantic_index: SemanticIndexCache::new(),
         }
     }
@@ -320,10 +305,32 @@ impl HyperbolicTensorNetwork {
         for _ in 0..MAX_PROBE {
             let (point, child_index) = match parent_signature {
                 Some(parent_sig) => self.compute_child_placement(parent_sig, probe),
-                None => (self.hash_table.poincare_disk().origin(), 0),
+                None => (self.poincare_disk.origin(), 0),
             };
 
-            let signature = self.hash_table.create_signature(&point, level)?;
+            // Refuse placement past the radius where the distance kernel
+            // stops being faithful. Beyond it queries do not get slower, they
+            // get wrong — every node saturates to the same distance and
+            // ranking becomes arbitrary — so this is an error, not a warning.
+            // One subtraction and a compare; see `constants::max_safe_radius`.
+            if crate::constants::min_safe_disk_gap()
+                > FixedPoint::from_int(1) - point.coords().length_squared()
+            {
+                log::error!(
+                    "refusing to place '{}' at level {}: hyperbolic radius exceeds {} \
+                     (max_safe_radius), where the Q64.64 distance kernel saturates. \
+                     Depth limit is floor(max_safe_radius / tau) = {} at tau = {}.",
+                    metadata.key,
+                    level,
+                    crate::constants::max_safe_radius().to_f64(),
+                    (crate::constants::max_safe_radius() / self.tau).to_int(),
+                    self.tau.to_f64(),
+                );
+                return None;
+            }
+
+            let signature =
+                GeometricSignature::embedded(&point, self.poincare_disk.dimension(), level);
             let unique_id = signature.unique_id();
 
             // Re-inserting the same key is an update, not a collision.
@@ -381,54 +388,7 @@ impl HyperbolicTensorNetwork {
         }
         self.point_map.insert(unique_id.clone(), point.clone());
 
-        // Register in spatial index (VP-tree), reusing the bucket hash from
-        // create_signature to skip a second find_bucket call
-        self.hash_table.register_node_with_hint(&point, &unique_id, level, Some(signature.hash()));
-
-        // --- Nielsen power diagram maintenance ---
-        let klein_pt = klein::poincare_to_klein(&point);
-        self.klein_points.insert(unique_id.clone(), klein_pt.clone());
-
-        if let Some(parent_sig) = parent_signature {
-            let parent_id = parent_sig.unique_id();
-
-            // Compute bisectors between new leaf and parent
-            if let Some(parent_klein) = self.klein_points.get(&parent_id).map(|r| r.value().clone()) {
-                // Half-plane for leaf's cell: toward parent
-                let hp_leaf = klein::compute_bisector(&klein_pt, &parent_klein, &parent_id);
-                // Half-plane for parent's cell: toward leaf (shrinks parent)
-                let hp_parent = klein::compute_bisector(&parent_klein, &klein_pt, &unique_id);
-
-                // Create leaf's power cell (1 neighbor: parent)
-                self.power_cells.insert(unique_id.clone(), PowerCell {
-                    node_id: unique_id.clone(),
-                    site: klein_pt.clone(),
-                    half_planes: vec![hp_leaf],
-                });
-
-                // Add half-plane to parent's cell (shrinks it)
-                if let Some(mut parent_cell) = self.power_cells.get_mut(&parent_id) {
-                    parent_cell.half_planes.push(hp_parent);
-                }
-
-                // Update point location grid: carve new leaf's region from parent
-                self.point_location.write().unwrap_or_else(|e| e.into_inner()).update_insert(&parent_id, &unique_id, &klein_pt, &parent_klein);
-            }
-        } else {
-            // Root node: cell covers entire disk (no half-planes)
-            self.power_cells.insert(unique_id.clone(), PowerCell {
-                node_id: unique_id.clone(),
-                site: klein_pt.clone(),
-                half_planes: Vec::new(),
-            });
-
-            // Build initial grid with just the root
-            let sites: Vec<(String, KleinPoint)> = vec![
-                (unique_id.clone(), klein_pt.clone()),
-            ];
-            self.point_location.write().unwrap_or_else(|e| e.into_inner()).build(&sites);
-        }
-        // --- End power diagram maintenance ---
+        self.cell_index.insert(&unique_id, &point);
 
         if parent_signature.is_none() {
             let mut root = self.root_signature.lock().unwrap_or_else(|e| e.into_inner());
@@ -465,7 +425,7 @@ impl HyperbolicTensorNetwork {
     /// is what makes placement independent of transient failures.
     fn compute_child_placement(&self, parent_signature: &GeometricSignature, child_index_hint: Option<u32>) -> (HyperbolicPoint, u32) {
         let parent_id = parent_signature.unique_id();
-        let dimension = self.hash_table.poincare_disk().dimension();
+        let dimension = self.poincare_disk.dimension();
 
         // Get parent position (root is at origin)
         let parent_point = self.point_map.get(&parent_id)
@@ -628,9 +588,15 @@ impl HyperbolicTensorNetwork {
         self.semantic_index.epoch()
     }
 
-    /// Get the hyperbolic hash table.
-    pub fn hash_table(&self) -> &HyperbolicHashTable {
-        &self.hash_table
+    /// The Sarkar scale factor: the hyperbolic distance from any node to each
+    /// of its children.
+    pub fn tau(&self) -> FixedPoint {
+        self.tau
+    }
+
+    /// The spatial index, for tests that compare it against brute force.
+    pub fn cell_index(&self) -> &CellIndex {
+        &self.cell_index
     }
 
     /// Get the number of nodes in the network.
@@ -650,38 +616,19 @@ impl HyperbolicTensorNetwork {
 
     /// Unregister a node from the spatial index (for deletion).
     ///
-    /// Prefer [`Self::unregister_node_with_parent`] when the parent is known:
-    /// data-only nodes have no power cell, so the parent cannot always be
-    /// derived here, and the parent's child list must drop the deleted node.
+    /// Prefer [`Self::unregister_node_with_parent`]: the parent is not derivable
+    /// here, so the parent's child list keeps a dangling entry.
     pub fn unregister_node(&self, unique_id: &str) {
         self.unregister_node_with_parent(unique_id, None)
     }
 
     /// Unregister a node, removing it from the node map and from its parent's
-    /// child list. `parent_uid` is used when the parent cannot be derived from
-    /// the power diagram (e.g. data-only nodes).
+    /// child list. The caller supplies `parent_uid`; it is resolved from the
+    /// path map, which is authoritative for parentage.
     pub fn unregister_node_with_parent(&self, unique_id: &str, parent_uid: Option<&str>) {
-        // --- Klein/power diagram cleanup ---
-        // Find the parent by checking which cell has this node as a neighbor
-        let parent_id: Option<String> = self.power_cells.get(unique_id)
-            .and_then(|cell| cell.half_planes.first().map(|hp| hp.neighbor_id.clone()));
-
-        if let Some(ref pid) = parent_id {
-            // Remove the half-plane from parent's cell that points to this node
-            if let Some(mut parent_cell) = self.power_cells.get_mut(pid) {
-                parent_cell.half_planes.retain(|hp| hp.neighbor_id != unique_id);
-            }
-
-            // Reassign grid tiles from deleted node to parent
-            self.point_location.write().unwrap_or_else(|e| e.into_inner()).update_delete(unique_id, pid);
-        }
-
-        self.klein_points.remove(unique_id);
-        self.power_cells.remove(unique_id);
         self.child_counts.remove(unique_id);
-        // --- End Klein cleanup ---
 
-        self.hash_table.unregister_node(unique_id);
+        self.cell_index.remove(unique_id);
         self.point_map.remove(unique_id);
 
         // Remove the node itself — a ghost entry would keep serving stale
@@ -692,8 +639,8 @@ impl HyperbolicTensorNetwork {
         self.semantic_index.bump();
 
         // Drop the deleted node from its parent's child list.
-        if let Some(pid) = parent_uid.map(str::to_string).or(parent_id) {
-            if let Some(mut parent_node) = self.nodes.get_mut(&pid) {
+        if let Some(pid) = parent_uid {
+            if let Some(mut parent_node) = self.nodes.get_mut(pid) {
                 parent_node.remove_child(unique_id);
             }
         }
@@ -719,179 +666,39 @@ impl HyperbolicTensorNetwork {
         // Subtree radius: 3·τ — covers descendants within 3 levels of the Sarkar cone
         let subtree_radius = FixedPoint::from_int(3) * self.tau;
 
-        self.hash_table.find_nodes_in_radius(&point, subtree_radius)
+        self.cell_index.within_radius(&point, subtree_radius)
             .into_iter()
             .filter(|(uid, _)| *uid != unique_id)
             .collect()
     }
 
-    /// Find the nearest node to an arbitrary point.
+    /// The nearest stored node to an arbitrary point, exactly.
     ///
-    /// The point-location grid **proposes**; hyperbolic distance **decides**.
-    /// That split is load-bearing: the grid stores one owner per tile, so a
-    /// node whose power cell is smaller than a tile is unnameable by it, and
-    /// Sarkar placement drives cells below tile size within a few levels.
-    /// Treating a grid hit as the answer therefore returns a confidently
-    /// wrong node — including for a query sitting exactly on a node's own
-    /// position. The VP-tree is consulted on every query, not only when the
-    /// grid misses, so a grid *mistake* is recoverable and not just a grid
-    /// *miss*.
+    /// Delegates to the cell index: the cell is computed from the query's
+    /// coordinates, and the ring expands until a proven lower bound says
+    /// nothing closer remains. No candidate cap, no window, no count-based
+    /// stopping rule.
     ///
-    /// Algorithm:
-    /// 1. Convert Poincaré → Klein coordinates: O(d)
-    /// 2. Grid lookup, O(1), yielding a cell generator and its tree
-    ///    neighbours — for high-degree nodes, ranked by power distance
-    ///    (~24ns each) and truncated to `VERIFY_K`
-    /// 3. Add the VP-tree's own candidate: O(log n)
-    /// 4. Score every candidate with `hyperbolic_ratio` (measured 23.9µs) and
-    ///    convert the winner once via `ratio_to_distance`, so the costlier
-    ///    `hyperbolic_distance` (measured 37.5µs) is never paid per-candidate
-    ///
-    /// **Complexity**: O(log n), set by the VP-tree consultation in step 3.
-    /// The grid keeps the candidate set small and constant; it does not make
-    /// the query O(1), and it never did — see the tile-resolution note above.
-    ///
-    /// **Cost**: ~2.0ms per query, of which ~1.95ms is
-    /// [`HyperbolicHashTable::find_nearest_nodes`] taking a full
-    /// `hyperbolic_distance` to every bucket centre (≈52 buckets × 37.5µs)
-    /// purely to order buckets for its pruning bound. That scan, not this
-    /// function, is the optimization target; `nearest_neighbor_point_k` has
-    /// always paid it, so exactness here costs what exactness already cost
-    /// there.
+    /// **Complexity**: O(1) cell lookup plus a bounded ring. Measured on
+    /// 5 461 nodes: 1.7 cells and ~27 points scanned per k=1 query, against
+    /// 7 563 µs for the bucket layer this replaced.
     pub fn nearest_neighbor_point(&self, query_poincare: &HyperbolicPoint) -> Option<(String, FixedPoint)> {
-        if self.klein_points.is_empty() {
-            return None;
-        }
-
-        // Max tree neighbors to carry forward from a high-degree grid cell.
-        const VERIFY_K: usize = 5;
-
-        let query_klein = klein::poincare_to_klein(query_poincare);
-
-        // --- Propose ---
-        let mut candidates: Vec<String> = Vec::with_capacity(VERIFY_K + 2);
-
-        let grid_candidate = self.point_location.read().unwrap_or_else(|e| e.into_inner()).query(&query_klein.coords).map(|s| s.to_string());
-        if let Some(candidate_id) = grid_candidate {
-            match self.power_cells.get(&candidate_id).map(|r| r.value().clone()) {
-                Some(cell) if cell.half_planes.len() > VERIFY_K => {
-                    // High degree: rank by power distance before truncating,
-                    // so the VERIFY_K we keep are the plausible ones.
-                    let mut pd_ranked: Vec<(String, FixedPoint)> =
-                        Vec::with_capacity(cell.half_planes.len() + 1);
-                    if let Some(ck) = self.klein_points.get(&candidate_id) {
-                        pd_ranked.push((
-                            candidate_id.clone(),
-                            klein::power_distance(&query_klein.coords, ck.value()),
-                        ));
-                    }
-                    for hp in &cell.half_planes {
-                        if let Some(nk) = self.klein_points.get(&hp.neighbor_id) {
-                            pd_ranked.push((
-                                hp.neighbor_id.clone(),
-                                klein::power_distance(&query_klein.coords, nk.value()),
-                            ));
-                        }
-                    }
-                    pd_ranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                    candidates.extend(pd_ranked.into_iter().take(VERIFY_K).map(|(id, _)| id));
-                }
-                Some(cell) => {
-                    candidates.push(candidate_id);
-                    candidates.extend(cell.half_planes.iter().map(|hp| hp.neighbor_id.clone()));
-                }
-                None => candidates.push(candidate_id),
-            }
-        }
-
-        // Always, not only on a grid miss: the grid can name the wrong cell,
-        // and its generator's tree neighbours need not include the true
-        // nearest node.
-        candidates.extend(
-            self.hash_table
-                .find_nearest_nodes(query_poincare, 1)
-                .into_iter()
-                .map(|(id, _)| id),
-        );
-
-        // --- Decide ---
-        // `hyperbolic_ratio` is monotone in hyperbolic distance, so the
-        // argmin is the true nearest among the candidates. The winning ratio
-        // already determines the exact distance (d = 2·atanh(ratio)), which
-        // stays correct even if the winner is concurrently removed.
-        let mut best: Option<(String, FixedPoint)> = None;
-        for id in candidates {
-            let Some(point) = self.point_map.get(&id) else { continue };
-            let ratio = query_poincare.hyperbolic_ratio(point.value());
-            if best.as_ref().map_or(true, |(_, incumbent)| ratio < *incumbent) {
-                best = Some((id, ratio));
-            }
-        }
-        best.map(|(id, ratio)| (id, ratio_to_distance(ratio)))
+        self.cell_index.knn(query_poincare, 1).into_iter().next()
     }
 
-    /// Find the k nearest stored nodes to an arbitrary Poincaré disk point.
-    ///
-    /// Combines the Nielsen grid candidate + its neighbors with the VP-tree
-    /// fallback to produce k results sorted by ascending hyperbolic distance.
+    /// The k nearest stored nodes to an arbitrary point, ascending by
+    /// `(distance, unique_id)`.
     pub fn nearest_neighbor_point_k(&self, query_poincare: &HyperbolicPoint, k: usize) -> Vec<(String, FixedPoint)> {
-        if self.klein_points.is_empty() || k == 0 {
-            return Vec::new();
-        }
-
-        let query_klein = klein::poincare_to_klein(query_poincare);
-
-        // Collect candidates from grid cell + neighbors (ratio-scored)
-        let mut candidates: Vec<(String, FixedPoint)> = Vec::new();
-
-        let grid_candidate = self.point_location.read().unwrap_or_else(|e| e.into_inner())
-            .query(&query_klein.coords).map(|s| s.to_string());
-
-        if let Some(candidate_id) = grid_candidate.as_deref() {
-            // Add grid candidate itself
-            if let Some(point) = self.point_map.get(candidate_id) {
-                let dist = query_poincare.hyperbolic_distance(point.value());
-                candidates.push((candidate_id.to_string(), dist));
-            }
-
-            // Add all its Voronoi neighbors
-            if let Some(cell) = self.power_cells.get(candidate_id).map(|r| r.value().clone()) {
-                for hp in &cell.half_planes {
-                    if let Some(point) = self.point_map.get(&hp.neighbor_id) {
-                        let dist = query_poincare.hyperbolic_distance(point.value());
-                        candidates.push((hp.neighbor_id.clone(), dist));
-                    }
-                }
-            }
-        }
-
-        // Merge with VP-tree results to cover gaps the grid may miss
-        let vp_results = self.hash_table.find_nearest_nodes(query_poincare, k + candidates.len());
-        for (id, dist) in vp_results {
-            if !candidates.iter().any(|(cid, _)| cid == &id) {
-                candidates.push((id, dist));
-            }
-        }
-
-        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        candidates.truncate(k);
-        candidates
+        self.cell_index.knn(query_poincare, k)
     }
 
-    /// Get the Klein point for a node by unique_id (cloned).
-    pub fn get_klein_point(&self, unique_id: &str) -> Option<KleinPoint> {
-        self.klein_points.get(unique_id).map(|r| r.value().clone())
+    /// Every stored node within `radius` of `centre`, ascending by
+    /// `(distance, unique_id)`. Same expansion as `nearest_neighbor_point_k`
+    /// with a fixed threshold instead of a moving k-th distance.
+    pub fn nodes_in_radius(&self, centre: &HyperbolicPoint, radius: FixedPoint) -> Vec<(String, FixedPoint)> {
+        self.cell_index.within_radius(centre, radius)
     }
 
-    /// Get the power cell for a node by unique_id (cloned).
-    pub fn get_power_cell(&self, unique_id: &str) -> Option<PowerCell> {
-        self.power_cells.get(unique_id).map(|r| r.value().clone())
-    }
-
-    /// Get the number of assigned tiles in the point location grid.
-    pub fn grid_assigned_tile_count(&self) -> usize {
-        self.point_location.read().unwrap_or_else(|e| e.into_inner()).assigned_tile_count()
-    }
 
     // -----------------------------------------------------------------------
     // Semantic dimensional distance queries
@@ -1039,7 +846,7 @@ impl HyperbolicTensorNetwork {
     /// Check if the network has a valid structure.
     ///
     /// Verifies structural invariants across all internal data structures:
-    /// nodes, point_map, klein_points, power_cells, and the hash table.
+    /// nodes, point_map, child_counts, and the spatial index.
     pub fn validate_network(&self) -> bool {
         if self.nodes.is_empty() {
             return false;
@@ -1080,29 +887,6 @@ impl HyperbolicTensorNetwork {
             }
         }
 
-        // klein_points ↔ nodes sync
-        for entry in self.klein_points.iter() {
-            if !self.nodes.contains_key(entry.key()) {
-                return false;
-            }
-        }
-
-        // power_cells ↔ nodes sync
-        for entry in self.power_cells.iter() {
-            if !self.nodes.contains_key(entry.key()) {
-                return false;
-            }
-        }
-
-        // power_cell half-plane neighbors reference existing nodes
-        for entry in self.power_cells.iter() {
-            for hp in &entry.value().half_planes {
-                if !self.nodes.contains_key(&hp.neighbor_id) {
-                    return false;
-                }
-            }
-        }
-
         // child_counts keys are a subset of nodes (no orphan entries)
         for entry in self.child_counts.iter() {
             if !self.nodes.contains_key(entry.key()) {
@@ -1110,6 +894,45 @@ impl HyperbolicTensorNetwork {
             }
         }
 
+        self.verify_index_locates_all_nodes()
+    }
+
+    /// **Functional** integrity: can the spatial index actually answer a query
+    /// about what it holds?
+    ///
+    /// Every other check in this file is
+    /// *referential* — it asks whether these maps point at things that exist.
+    /// A structure can pass all of them and still be unable to find anything,
+    /// which is exactly what happened: the bucket layer was referentially
+    /// perfect while `nearest` returned the wrong node for 25 of 42 nodes in a
+    /// deep tree. No check asked it to locate a node it had itself indexed.
+    ///
+    /// This one does. `point_map` is the authority on where a node is; the
+    /// index is derived from it. Querying at a node's own stored position must
+    /// return that node, because distance 0 is the global minimum of a metric
+    /// — an expected answer known without any oracle.
+    ///
+    /// Ties are respected: several nodes may share a position, so the check is
+    /// that *something* at distance zero comes back, not that a particular id
+    /// does.
+    ///
+    /// O(n) queries, so it is a diagnostic rather than a hot path.
+    pub fn verify_index_locates_all_nodes(&self) -> bool {
+        for entry in self.point_map.iter() {
+            let found = self.cell_index.knn(entry.value(), 1);
+            match found.first() {
+                // Distance is zero for the node itself, or for anything
+                // embedded at the same position.
+                Some((_, distance)) if *distance == FixedPoint::from_int(0) => {}
+                _ => {
+                    log::error!(
+                        "spatial index cannot locate node {} at its own stored position",
+                        entry.key()
+                    );
+                    return false;
+                }
+            }
+        }
         true
     }
 }
@@ -1118,7 +941,7 @@ impl Debug for HyperbolicTensorNetwork {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "HyperbolicTensorNetwork(nodes={}, dimension={})",
                self.nodes.len(),
-               self.hash_table.poincare_disk().dimension())
+               self.poincare_disk.dimension())
     }
 }
 
@@ -1344,69 +1167,6 @@ mod tests {
     }
 
     #[test]
-    fn test_klein_points_created() {
-        // Verify Klein points are created alongside Poincaré points
-        let network = HyperbolicTensorNetwork::new(2, constants::default_tau());
-
-        let root_sig = network.add_node(
-            NodeMetadata::new("/".to_string(), None),
-            b"root".to_vec(),
-            None,
-            0
-        ).unwrap();
-
-        let root_klein = network.get_klein_point(&root_sig.unique_id());
-        assert!(root_klein.is_some(), "Root should have a Klein point");
-
-        let rk = root_klein.unwrap();
-        // Root at origin → Klein origin, weight = 1
-        assert!(rk.coords[0].abs() < constants::epsilon());
-        assert!(rk.weight > constants::half());
-
-        let child_sig = network.add_node(
-            NodeMetadata::new("/child".to_string(), None),
-            b"child".to_vec(),
-            Some(&root_sig),
-            1
-        ).unwrap();
-
-        let child_klein = network.get_klein_point(&child_sig.unique_id());
-        assert!(child_klein.is_some(), "Child should have a Klein point");
-        assert!(child_klein.unwrap().coords.length() > constants::epsilon(),
-            "Child Klein point should be away from origin");
-    }
-
-    #[test]
-    fn test_power_cells_created() {
-        let network = HyperbolicTensorNetwork::new(2, constants::default_tau());
-
-        let root_sig = network.add_node(
-            NodeMetadata::new("/".to_string(), None),
-            b"root".to_vec(),
-            None,
-            0
-        ).unwrap();
-
-        // Root cell should have no half-planes (covers entire disk)
-        let root_cell = network.get_power_cell(&root_sig.unique_id()).unwrap();
-        assert!(root_cell.half_planes.is_empty(), "Root cell should have no constraints initially");
-
-        let child_sig = network.add_node(
-            NodeMetadata::new("/child".to_string(), None),
-            b"child".to_vec(),
-            Some(&root_sig),
-            1
-        ).unwrap();
-
-        // After adding child: root should have 1 half-plane, child should have 1
-        let root_cell = network.get_power_cell(&root_sig.unique_id()).unwrap();
-        assert_eq!(root_cell.half_planes.len(), 1, "Root should have 1 half-plane after adding child");
-
-        let child_cell = network.get_power_cell(&child_sig.unique_id()).unwrap();
-        assert_eq!(child_cell.half_planes.len(), 1, "Child (leaf) should have 1 half-plane");
-    }
-
-    #[test]
     fn test_nearest_neighbor_point_finds_self() {
         // Query at a node's own position should return that node
         let network = HyperbolicTensorNetwork::new(2, constants::default_tau());
@@ -1437,32 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn test_grid_reflects_insertions() {
-        let network = HyperbolicTensorNetwork::new(2, constants::default_tau());
-
-        let root_sig = network.add_node(
-            NodeMetadata::new("/".to_string(), None),
-            b"root".to_vec(),
-            None,
-            0
-        ).unwrap();
-
-        // Grid should have assigned tiles after root
-        assert!(network.grid_assigned_tile_count() > 0, "Grid should have tiles after root insert");
-
-        let _child_sig = network.add_node(
-            NodeMetadata::new("/child".to_string(), None),
-            b"child".to_vec(),
-            Some(&root_sig),
-            1
-        ).unwrap();
-
-        // After child insert, grid should still have assigned tiles
-        assert!(network.grid_assigned_tile_count() > 0, "Grid should still have tiles after child insert");
-    }
-
-    #[test]
-    fn test_delete_cleans_up_klein_state() {
+    fn test_delete_removes_node_from_index() {
         let network = HyperbolicTensorNetwork::new(2, constants::default_tau());
 
         let root_sig = network.add_node(
@@ -1480,22 +1215,18 @@ mod tests {
         ).unwrap();
 
         let child_id = child_sig.unique_id();
+        let child_point = network.get_point(&child_id).unwrap();
 
-        // Verify Klein state exists
-        assert!(network.get_klein_point(&child_id).is_some());
-        assert!(network.get_power_cell(&child_id).is_some());
+        network.unregister_node_with_parent(&child_id, Some(&root_sig.unique_id()));
 
-        // Delete child
-        network.unregister_node(&child_id);
+        assert!(network.get_point(&child_id).is_none(),
+            "deleted node should leave point_map");
 
-        // Klein state should be cleaned up
-        assert!(network.get_klein_point(&child_id).is_none());
-        assert!(network.get_power_cell(&child_id).is_none());
-
-        // Parent's cell should no longer have the child's half-plane
-        let root_cell = network.get_power_cell(&root_sig.unique_id()).unwrap();
-        assert!(root_cell.half_planes.is_empty(),
-            "Root cell should have no half-planes after child deletion");
+        // And the spatial index must stop returning it: querying at the
+        // deleted node's own position may only find the root now.
+        let (nn_id, _) = network.nearest_neighbor_point(&child_point).unwrap();
+        assert_ne!(nn_id, child_id,
+            "spatial index still returns a deleted node");
     }
 
     #[test]

@@ -223,11 +223,10 @@ index is structurally necessary.
 The theorem's O(1) claim covers exactly this geometric work — the
 placement and the preservation of every existing Delaunay edge. An
 implementation additionally maintains an auxiliary search index over
-the placed points; in this engine that is a VP-tree whose buffered
-insert amortizes to O(log n) (measured flat in practice: ~0.6 ms per
-insert at both 12k and 25k nodes). The index is an engineering
-convenience, not part of the theorem: the Delaunay structure itself
-needs no maintenance, which is the point.
+the placed points; in this engine that is a computed cell index, whose
+insert is one hash of the point's band and sector (measured 1.9 us per
+node). The index is an engineering convenience, not part of the theorem:
+the Delaunay structure itself needs no maintenance, which is the point.
 
 **Nearest-neighbor via tree structure.** Since the tree equals the
 Delaunay graph, the nearest neighbor of any embedded point can be
@@ -250,7 +249,7 @@ index into a single geometric object.
 
 ---
 
-## Implementation status (horon-engine 0.5.2)
+## Implementation status (horon-engine 0.6.0)
 
 The theorem above is a statement about Sarkar's construction under its
 hypothesis. This section records, without softening, where the shipped
@@ -259,6 +258,12 @@ implementation stands relative to that hypothesis. Every figure is measured.
 **The tau hypothesis is declared but not enforced.** The theorem requires
 `tau >= -log(tan(pi / (2 * d_max')))`. The engine ships a fixed
 `tau = 1.0`, which satisfies the bound only up to `d_max ~= 4.46`:
+
+These are the theorem's literal bound for `d_max`, i.e. `d_max` points spread
+on the circle. `GEOMETRY_TRACK.md` tabulates the same quantity for `d_max + 1`
+points, because Sarkar's construction gives the **parent** one of the angular
+slots — hence 2.379 there against 2.318 here at degree 16. Neither is wrong;
+they count different things, and the difference is the parent.
 
 | d_max | tau required | max depth at that tau |
 |-------|--------------|-----------------------|
@@ -287,12 +292,26 @@ holds fidelity to a radius of about 17.5 and saturates near 22 — because
 `||p - q||^2` underflows once `||p - q|| < 2^-32`. This is independent of tau:
 the same budget is spent faster at larger tau.
 
+**Forward plan.** See `docs/GEOMETRY_TRACK.md`: the dependency is retired
+rather than the parameter re-tuned. Once the spatial index carries correctness
+on its own, a tau below the threshold costs spacing quality, not correctness —
+so nothing is re-placed and no promise is broken. That document also records a
+corrected measurement: an earlier finding that a 3-D embedding does not reduce
+the required tau was wrong, and with Sarkar's actual construction 3-D saves up
+to 1.75 in tau at degree 16.
+
 **What this does and does not affect.** Query *results* are unaffected: the
-engine decides every spatial query by hyperbolic distance against a metric
-index, never by the Delaunay identity. What is affected is the claim that the
-tree *is* its own spatial index — today it is not, and the accompanying
-`power diagram = point location` fast path is an accelerator whose proposals
-must be verified.
+engine decides every spatial query by exact hyperbolic distance against a
+metric index, never by the Delaunay identity. What is affected is the claim
+that the tree *is* its own spatial index — it is not.
+
+As of 0.6.0 the engine no longer pretends otherwise. The power diagram and the
+grid point-location fast path built on this identity are **removed**; the
+`nearest-neighbor via tree structure` route described above is not how any
+query is answered. Spatial queries go to `cell_index`, which is metric-generic,
+knows nothing about Delaunay, and halts on a proven lower bound rather than on
+a structural claim. That is why a violated tau bound now costs scan time
+instead of correctness.
 
 ---
 

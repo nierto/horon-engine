@@ -26,7 +26,7 @@ numbers (`TEST_RESULTS.md` retired).
 ## How to reproduce
 
 ```sh
-GMATH_PROFILE=embedded cargo bench --bench power_diagram
+GMATH_PROFILE=embedded cargo bench --bench spatial_queries
 GMATH_PROFILE=embedded cargo bench --bench semantic       # semantic suite
 GMATH_PROFILE=embedded cargo run --release --example concurrency_bench
 ```
@@ -36,36 +36,52 @@ GMATH_PROFILE=embedded cargo run --release --example concurrency_bench
 | Benchmark | Result |
 |---|---|
 | Power distance, single 4D | 23.8 ns |
-| Point-location grid query, res 16²/32²/64²/128² | 15.0 / 14.9 / 14.9 / 14.5 ns (flat across grid size) |
 | Brute-force NN, 10 / 100 sites (reference) | 233 ns / 2.45 µs (linear in N) |
 | Poincaré→Klein, 2D / 4D | 794 / 825 ns |
 | Klein roundtrip 4D (2 conversions + sqrt) | 26.9 µs |
 | Hyperbolic distance, single 2D (one-sqrt kernel) | 35.4 µs (was 76.5 µs — the old form paid four sqrts, two of them a norm→square round-trip) |
 | Hyperbolic ratio, single 2D (no atanh) | 22.8 µs (was 61.4 µs) |
 
-The grid query is flat across grid resolutions — that demonstrates the probe
-cost is independent of *grid size*. Independence from *tree size* is argued by
-mechanism (fixed-resolution grid, bounded candidate verification), not by this
-table; full-API costs below show what a caller actually pays.
+An exact hyperbolic distance is the unit of cost that matters: at ~23–35 µs it
+dwarfs everything else on the query path, so a spatial query's cost is very
+nearly *how many exact distances it was forced to evaluate*. The full-API
+figures below are best read that way — `nearest` at 51 µs on a 10-node tree is
+roughly two exact distances, and at 99 µs on 200 nodes roughly four.
 
 ## Full storage-API operations
 
-| Operation | Measured | Notes |
-|---|---|---|
-| `get` | ~0.94 µs/op | 1 000-key store, hot loop |
-| `exists` | ~0.08 µs/op | same |
-| `put` (marginal, steady state) | ~0.95 µs | insert into an existing populated tree |
-| `put` (fresh flat tree, n ≤ 100) | ~3.5–7 ms/node | grid-tile reassignment for children of root dominates — worst case, amortizes away as fan-out grows |
-| `remove` | ~0.2–3 ms/op | grid tile handback; scales with tiles owned |
-| `nearest` (power diagram, full API) | ~250–290 µs/query | 10–200-node trees; ~82 µs at origin fast path |
-| `neighbors` (VP-tree KNN, full API) | ~2.1–4.3 ms/query | k=1–5, 10–200 nodes; −32% across sizes from the one-sqrt kernel (was 3.1–9.8 ms; per-candidate exact distance 76.5 → 35.4 µs) |
-| Concurrent read throughput | see `examples/concurrency_bench.rs` output on your machine | |
+Re-measured 2026-08-22 on the same machine and toolchain after the 0.6.0 index
+replacement. The 0.5.x column is the previously published figure, kept so the
+change is auditable; both columns are criterion medians.
+
+| Operation | 0.5.x | 0.6.0 | Notes |
+|---|---|---|---|
+| `get` | ~0.94 µs/op | not re-measured | 1 000-key store, hot loop; untouched by the index change |
+| `exists` | ~0.08 µs/op | not re-measured | same |
+| `put` (marginal, steady state) | ~0.95 µs | ~1.18 µs | flat at base sizes 10/50/100. The one row that did not improve; the old code was not re-run, so the gap is not attributable |
+| `put` (fresh flat tree, n ≤ 100) | ~3.5–7 ms/node | **46.8–95.6 µs/node** | 95.6 at n=10, 52.2 at 50, 46.8 at 100 — the per-node cost *falls* with tree size now |
+| `remove` | ~0.2–3 ms/op | **7.9–30.7 µs/op** | delete-all over 10/50/100-node trees |
+| `nearest` (full API) | ~250–290 µs/query | **51–99 µs/query** | 51 at n=10, 65 at 50, 76 at 100, 99 at 200 |
+| `nearest` at the origin | ~82 µs | **7.6 µs** | 50-node tree; the query sits exactly on the root |
+| `neighbors` (KNN, full API) | ~2.1–4.3 ms/query | **38–223 µs/query** | k=1: 38/65/95/138 µs · k=5: 125/148/177/223 µs, at n=10/50/100/200 |
+| Concurrent read throughput | see `examples/concurrency_bench.rs` output on your machine | | |
+
+Two cautions on reading the query rows. First, the 0.5.x `nearest` figure is
+the cost of an answer that was **often wrong** — the point-location grid named
+a tile owner and the result was returned unverified (25 of 42 self-queries
+wrong in a deep tree). Comparing against it measures the replacement of a
+broken thing, not a tuning win. Second, 0.5.2 shipped correctness before speed
+and its `nearest` cost ~2 ms; the 0.6.0 figures are what removed that.
+
+The insert and delete rows have a simpler story: every insert used to compute
+two Klein bisectors, reassign grid tiles, and pay one **exact** 37.5 µs
+hyperbolic distance to maintain a bucket's pruning radius. All three are gone.
 
 Honest note: geometric *primitives* run in nanoseconds; full-API spatial
-queries run in hundreds of µs to ms because every candidate is verified with
-the exact (0-ULP) hyperbolic distance. For faster *hyperbolic* KNN, a
-(cheaper predicate paths) is the planned improvement to watch; *semantic* KNN was
-fixed by the semantic index (below).
+queries still run in tens to hundreds of µs because every surviving candidate
+is verified with the exact (0-ULP) hyperbolic distance. That is the guarantee,
+not an inefficiency — the index's job is to make the number of survivors
+small, and the ring bound is what proves it may stop.
 
 ## Semantic queries — the O(n×d) wall, and the index killing it
 

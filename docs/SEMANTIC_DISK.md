@@ -9,7 +9,7 @@ supplies the trajectory record this design turns into symbolic sequences).
 
 The engine has two query worlds with asymmetric machinery. The **structural**
 world (storage hierarchy → Poincaré disk via Sarkar) gets the full stack:
-power diagram, O(1) grid point location, per-bucket VP-trees. The
+Sarkar placement and an exact cell index over the disk. The
 **semantic** world (flat coordinate axes, dims 16+) got Euclidean space and,
 with the semantic index, an O(log n) VP-tree. But semantic axes usually carry a hidden
 hierarchy too — a course catalog's 17 category dims are not unrelated numbers,
@@ -92,9 +92,11 @@ Consequences, by construction:
 ### Anchor power-diagram (D)
 
 The taxonomy is a real tree, so it is embedded by inserting its concept
-paths into a private `Store` — Sarkar placement, Nielsen power diagram, and
-the point-location grid come along unchanged. Because the *sites* are the
-anchors (dozens), not the data nodes (unbounded):
+paths into a private `Store` — Sarkar placement and the Klein conversions come
+along unchanged. Classification is the exact Nielsen reduction over the anchor
+sites, `argmin_i (1 - <x, k_i>) * gamma_i`, evaluated directly; there is no
+precomputed cell structure. Because the *sites* are the anchors (dozens), not
+the data nodes (unbounded):
 
 - **`concept_of(key)` — constant-in-data-size classification.** Locate the
   node's derived position among the anchor cells — linear in the anchor
@@ -173,7 +175,7 @@ same discipline as the dimensional schema itself.
 ## Out of scope (documented, not built)
 
 - Reserved-band stored positions (hand-placement escape hatch — option C).
-- Per-anchor-cell NN bucketing (the O(1)-entry NN optimization).
+- Per-anchor-cell NN partitioning (the O(1)-entry NN optimization).
 - Learned/induced taxonomies (clustering); the taxonomy comes from data
   structure per the ratified decision.
 - Any `.htt` format change — none is needed, which is the point.

@@ -40,9 +40,6 @@ impl HTTStorage {
             config.max_memory_nodes,
             config.cache_size,
         );
-        if config.grid_resolution > 0 {
-            htt_config = htt_config.with_grid_resolution(config.grid_resolution);
-        }
         if config.tau > FixedPoint::from_int(0) {
             htt_config = htt_config.with_tau(config.tau);
         }

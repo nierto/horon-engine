@@ -95,10 +95,42 @@ pub fn min_safe_denominator() -> FixedPoint {
     FixedPoint::from_raw(16)
 }
 
-/// 0.3 = 3/10 — region radius for hash table origin bucket
+/// Largest hyperbolic radius at which a position is still meaningful.
+///
+/// **This is a measurement of the arithmetic, not a policy choice.** A node
+/// sits at radius `depth × tau`, and `1 − ‖p‖² ≈ 4·e^(−r)`, so coordinate
+/// *differences* shrink exponentially with radius. In Q64.64, `‖p − q‖²`
+/// underflows once `‖p − q‖ < 2^-32`, and the distance kernel then returns its
+/// saturation value for every pair — every node equidistant, ranking
+/// arbitrary.
+///
+/// Measured step error along a geodesic, walking outward in steps of 1:
+///
+/// | radius | error in a unit step |
+/// |--------|----------------------|
+/// | 16     | 3.4e-8               |
+/// | 18     | 8.9e-6               |
+/// | 20     | 2.0e-4               |
+/// | 22     | 4.5e-3               |
+/// | 24     | saturated (28.324)   |
+///
+/// 21 is the last radius comfortably before saturation. Placement beyond it is
+/// **refused** rather than warned about: past this point queries do not get
+/// slower, they get wrong, and a wrong answer that looks like an answer is the
+/// failure mode this engine has already paid for once.
 #[inline]
-pub fn region_radius() -> FixedPoint {
-    FixedPoint::from_int(3) / FixedPoint::from_int(10)
+pub fn max_safe_radius() -> FixedPoint {
+    FixedPoint::from_int(21)
+}
+
+/// `1 − ‖p‖²` at [`max_safe_radius`], as a squared-norm test.
+///
+/// Checking the radius directly would need `artanh` (16 µs) on every insert;
+/// this is one subtraction and a compare. `1 − tanh²(21/2) ≈ 3.06e-9`.
+#[inline]
+pub fn min_safe_disk_gap() -> FixedPoint {
+    let edge = (max_safe_radius() / FixedPoint::from_int(2)).tanh();
+    FixedPoint::from_int(1) - edge * edge
 }
 
 /// Pi, parsed from string for maximum precision

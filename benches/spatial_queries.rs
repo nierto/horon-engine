@@ -1,16 +1,15 @@
 //! =============================================================================
-//! Engine Benchmarks: Nielsen Power Diagram + Spatial Index
+//! Engine Benchmarks: spatial queries and the Klein model
 //! =============================================================================
 //!
-//! Measures the performance of the power diagram pipeline:
+//! Measures:
 //!   - Klein model conversions (Poincaré ↔ Klein)
 //!   - Power distance computation
-//!   - Point location grid (O(1) lookup vs brute force)
-//!   - Nearest neighbor queries through the full storage API
+//!   - Nearest neighbour queries through the full storage API
 //!   - Insert throughput at various tree sizes
 //!   - Insert+delete churn
 //!
-//! Run with: GMATH_PROFILE=embedded cargo bench --bench power_diagram
+//! Run with: GMATH_PROFILE=embedded cargo bench --bench spatial_queries
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use g_math::fixed_point::{FixedPoint, FixedVector};
@@ -18,7 +17,6 @@ use horon_engine::{
     HTTStorage, HTTStorageConfig,
     HyperbolicPoint,
     poincare_to_klein, klein_to_poincare, power_distance, KleinPoint,
-    PointLocationGrid,
 };
 
 // ---------------------------------------------------------------------------
@@ -54,20 +52,6 @@ fn generate_query_points(n: usize, dim: usize) -> Vec<Vec<FixedPoint>> {
         coords[0] = r * cos;
         if dim >= 2 { coords[1] = r * sin; }
         coords
-    }).collect()
-}
-
-/// Generate N KleinPoints at various positions inside the Klein disk.
-fn generate_klein_sites(n: usize, dim: usize) -> Vec<(String, KleinPoint)> {
-    (0..n).map(|i| {
-        let angle = i as f32 * 2.0 * std::f32::consts::PI / n as f32;
-        let r = 0.1 + (i as f32 % 8.0) * 0.1;
-        let mut coords = vec![0.0f32; dim];
-        coords[0] = r * angle.cos();
-        if dim >= 2 { coords[1] = r * angle.sin(); }
-        let p = HyperbolicPoint::from_f32_slice(&coords);
-        let k = poincare_to_klein(&p);
-        (format!("site_{}", i), k)
     }).collect()
 }
 
@@ -175,73 +159,6 @@ fn bench_power_distance(c: &mut Criterion) {
 }
 
 // ===========================================================================
-// BENCHMARK GROUP 3: Point Location Grid
-// ===========================================================================
-
-fn bench_point_location_grid(c: &mut Criterion) {
-    let mut group = c.benchmark_group("point_location_grid");
-
-    // Build grids at different resolutions
-    let sites = generate_klein_sites(20, 4);
-
-    for &res in &[16, 32, 64, 128] {
-        let mut grid = PointLocationGrid::with_dimension(res, 4);
-        grid.build(&sites);
-
-        let query = FixedVector::from_f32_slice(&[0.3, 0.1, 0.0, 0.0]);
-
-        group.bench_with_input(
-            BenchmarkId::new("query", res),
-            &res,
-            |b, _| {
-                b.iter(|| grid.query(black_box(&query)))
-            },
-        );
-    }
-
-    // Grid build time
-    for &n_sites in &[10, 50, 100] {
-        let sites = generate_klein_sites(n_sites, 4);
-
-        group.bench_with_input(
-            BenchmarkId::new("build_res64", n_sites),
-            &n_sites,
-            |b, _| {
-                b.iter(|| {
-                    let mut grid = PointLocationGrid::with_dimension(64, 4);
-                    grid.build(black_box(&sites));
-                    black_box(&grid);
-                })
-            },
-        );
-    }
-
-    // Incremental insert update
-    {
-        let parent_k = KleinPoint::new(FixedVector::from_f32_slice(&[0.0, 0.0, 0.0, 0.0]));
-        let child_k = KleinPoint::new(FixedVector::from_f32_slice(&[0.5, 0.0, 0.0, 0.0]));
-        let sites = vec![("root".to_string(), parent_k.clone())];
-
-        group.bench_function("update_insert_res64", |b| {
-            b.iter_batched(
-                || {
-                    let mut grid = PointLocationGrid::with_dimension(64, 4);
-                    grid.build(&sites);
-                    grid
-                },
-                |mut g| {
-                    g.update_insert("root", "child", black_box(&child_k), black_box(&parent_k));
-                    black_box(&g);
-                },
-                criterion::BatchSize::SmallInput,
-            )
-        });
-    }
-
-    group.finish();
-}
-
-// ===========================================================================
 // BENCHMARK GROUP 4: Storage API — Nearest Neighbor Point
 // ===========================================================================
 
@@ -267,7 +184,7 @@ fn bench_nearest_neighbor_api(c: &mut Criterion) {
         );
     }
 
-    // NN at origin (hits grid fast path — root is at origin)
+    // NN at the origin, where the root sits: the query is exactly on a node
     {
         let storage = build_storage(50);
         group.bench_function("nn_point_at_origin_50nodes", |b| {
@@ -491,7 +408,6 @@ criterion_group!(
     benches,
     bench_poincare_to_klein,
     bench_power_distance,
-    bench_point_location_grid,
     bench_nearest_neighbor_api,
     bench_find_nearest,
     bench_insert_throughput,

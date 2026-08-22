@@ -27,9 +27,10 @@ fn nearest_rejects_wrong_dimension_input() {
     assert!(store.nearest(&fp(&[0.1, 0.0, 0.0, 0.0])).is_ok());
 }
 
-/// `find_within` must see nodes at depth >= 2. Buckets only cover a
-/// bounded distance from the origin; deeper nodes are assigned to the nearest
-/// bucket outside its nominal region, and pruning must account for that.
+/// `find_within` must see nodes at depth >= 2. Depth pushes nodes toward the
+/// boundary exponentially, so a range query has to keep widening through the
+/// outer bands rather than stopping at the query's own neighbourhood. The
+/// bucket layer that originally failed this is gone; the property is not.
 #[test]
 fn find_within_sees_deep_nodes() {
     let store = Store::new();
@@ -107,12 +108,12 @@ fn delete_keeps_len_consistent() {
     assert_eq!(store.len(), 2);
 }
 
-/// inserting then deleting a deep node must leave later spatial queries
-/// both correct and un-degraded. The bucket that briefly held the deep node
-/// widened its pruning radius; after the delete that bound must shrink back so
-/// the bucket is not scanned by every unrelated query forever. Correctness is
-/// the observable proxy tested here — a lingering wide radius would still
-/// return right answers but scan more, so we assert results are exact.
+/// Inserting then deleting a deep node must leave later spatial queries
+/// correct. Originally this caught a bucket whose pruning radius stayed wide
+/// after the deep node left, so every unrelated query over-scanned forever.
+/// The cell index has no such per-region state — a deleted node leaves its
+/// cell and that is all — but the observable property is worth keeping:
+/// churn at depth must not perturb the answers.
 #[test]
 fn deep_node_churn_leaves_queries_correct() {
     let store = Store::new();

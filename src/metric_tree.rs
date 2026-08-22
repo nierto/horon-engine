@@ -1,15 +1,13 @@
 //! Generic static VP-tree over a pluggable metric (the semantic-index core).
 //!
 //! A build-once metric tree: no incremental insert/delete, no buffer, no lazy
-//! deletion. The dynamic per-bucket [`crate::hash_table::VPTree`] serves the
-//! hyperbolic spatial index, where entries churn; this static core serves the
-//! epoch model of the semantic index (`docs/SEMANTIC_INDEX.md`), where an
-//! index over a frozen snapshot is built in one shot and *discarded* on
-//! invalidation, never mutated.
+//! deletion. It serves the epoch model of the semantic index
+//! (`docs/SEMANTIC_INDEX.md`), where an index over a frozen snapshot is built
+//! in one shot and *discarded* on invalidation, never mutated. Structural
+//! spatial queries, where entries churn, go to [`crate::cell_index`] instead.
 //!
-//! Same proven algorithm as the bucket VPTree (Yianilos 1993): first-entry
-//! vantage point, median partition, tau-shrinking KNN with closer-subtree-
-//! first descent and inclusive pruning bounds.
+//! Yianilos 1993: first-entry vantage point, median partition, tau-shrinking
+//! KNN with closer-subtree-first descent and inclusive pruning bounds.
 //!
 //! # Correctness constraint
 //!

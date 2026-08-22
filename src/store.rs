@@ -137,7 +137,6 @@ impl StoreConfig {
             storage_path: None,
             flush_interval: 60,
             optimize_on_shutdown: true,
-            grid_resolution: 0,
             tau: self.tau,
         }
     }
@@ -323,17 +322,35 @@ impl Store {
         Ok(self.inner.get_semantic(key)?)
     }
 
+    /// The deepest node this store can place, given its `tau`.
+    ///
+    /// A node sits at hyperbolic radius `depth × tau`, and Q64.64 stops
+    /// representing coordinate differences faithfully past a radius of about
+    /// 21 — beyond that every node saturates to the same distance and ranking
+    /// becomes arbitrary. Placement past the limit is **refused**, so this is
+    /// the number to design against rather than discover by failing.
+    ///
+    /// Raising `tau` for wider fan-out lowers this proportionally: the default
+    /// `tau = 1.0` gives 21, `tau = 2.0` gives 10.
+    ///
+    /// Full metric fidelity degrades before the hard limit — the step error
+    /// along a geodesic is 3.4e-8 at radius 16, 2.0e-4 at 20. See
+    /// `docs/ARCHITECTURE.md`.
+    pub fn max_depth(&self) -> u32 {
+        let tau = self.inner.shared_htt().tensor_network().tau();
+        (crate::constants::max_safe_radius() / tau).to_int().max(0) as u32
+    }
+
     /// Find the nearest stored node to an arbitrary point in hyperbolic space.
     ///
     /// Coordinates are in the Poincare disk model (each component in `(-1, 1)`).
-    /// The power-diagram grid supplies candidates in O(1); the answer is
-    /// then decided by hyperbolic distance against the VP-tree's candidate
-    /// as well, so the result is the true nearest node.
+    /// The answer is the true nearest node: every surviving candidate is
+    /// ranked by exact hyperbolic distance.
     ///
-    /// **Complexity**: O(log n). The grid alone cannot decide the query —
-    /// it holds one owner per tile, and Sarkar placement drives power cells
-    /// below tile size within a few levels, so a grid hit may name a node
-    /// that is not nearest.
+    /// **Cost**: the query's own cell, then rings outward until a proven lower
+    /// bound rules out every cell not yet visited. Exact — nothing is capped,
+    /// sampled or windowed. How many cells that takes depends on how the tree
+    /// is shaped, so this is not O(1); measured figures are in BENCHMARKS.md.
     ///
     /// Returns `(key, hyperbolic_distance)`.
     pub fn nearest(&self, coords: &[FixedPoint]) -> Result<(String, FixedPoint), StoreError> {
@@ -345,9 +362,10 @@ impl Store {
     /// Like `nearest()` but returns multiple candidates, enabling the caller
     /// to post-filter and still get results.
     ///
-    /// **Complexity**: unlike `nearest()`, this always takes the bucketed
-    /// VP-tree path — O(B + log(n/B)) with B ≈ 61 fixed buckets — not the
-    /// O(1) power-diagram fast path.
+    /// **Cost**: as `nearest()` — the query's own cell, then rings outward until a proven lower
+    /// bound rules out every cell not yet visited. Exact — nothing is capped,
+    /// sampled or windowed. How many cells that takes depends on how the tree
+    /// is shaped, so this is not O(1); measured figures are in BENCHMARKS.md.
     ///
     /// Returns `(key, hyperbolic_distance)` sorted by ascending distance.
     pub fn nearest_k(&self, coords: &[FixedPoint], k: usize) -> Result<Vec<(String, FixedPoint)>, StoreError> {
@@ -359,8 +377,7 @@ impl Store {
     /// Returns keys sorted by ascending hyperbolic distance.
     /// The queried key itself is excluded from results.
     ///
-    /// **Complexity**: bucketed VP-tree search — O(B + log(n/B)) with
-    /// B ≈ 61 fixed buckets — not the O(1) power-diagram fast path.
+    /// **Cost**: as `nearest_k()`, from the queried node's own position.
     pub fn neighbors(&self, path: &str, k: usize) -> Result<Vec<String>, StoreError> {
         Ok(self.inner.find_nearest(path, k)?)
     }
@@ -636,8 +653,10 @@ impl Store {
 
     /// Find all nodes within a hyperbolic distance of an existing node.
     ///
-    /// **Complexity**: bucketed VP-tree range search; cost grows with the
-    /// number of buckets intersecting the radius and the result size.
+    /// **Cost**: ring expansion bounded by `radius` rather than by a running
+    /// k-th distance, so it grows with the radius and the result size. A
+    /// radius too large to express as a `cosh` prunes nothing and sweeps the
+    /// whole index — slow, but still exact.
     pub fn find_within(&self, path: &str, radius: FixedPoint) -> Result<Vec<String>, StoreError> {
         Ok(self.inner.find_in_radius(path, radius)?)
     }
@@ -859,14 +878,43 @@ fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
 
     #[test]
     fn test_tau_deep_tree() {
-        // tau=0.8 allows deeper trees within Q64.64 precision
+        // A smaller tau buys depth, because a node sits at radius depth × tau
+        // and the usable radius is fixed by the arithmetic, not by tau.
+        //
+        // This test previously built 40 levels at tau=0.8 — radius 32, well
+        // past the point where the distance kernel saturates — and asserted
+        // only that the key existed. It passed while every distance among
+        // those nodes was meaningless. Placement past the limit is now
+        // refused, so the honest assertions are: the limit scales with tau,
+        // depth up to it works, and beyond it fails loudly.
         let store = Store::with_config(StoreConfig::new().tau(FixedPoint::from_f64(0.8)));
+        let limit = store.max_depth();
+        assert_eq!(limit, 26, "21 / 0.8 = 26 levels");
+        assert!(
+            limit > Store::new().max_depth(),
+            "a smaller tau must allow more depth than the default"
+        );
+
         let mut path = String::new();
-        for i in 0..40 {
+        for i in 0..limit {
             path = format!("{}/n{}", path, i);
-            store.put(&path, b"x").unwrap();
+            store.put(&path, b"x").unwrap_or_else(|e| {
+                panic!("level {i} is inside the limit of {limit} but was refused: {e:?}")
+            });
         }
         assert!(store.exists(&path));
+
+        // Past the limit: refused, not silently placed in the saturated band.
+        let mut over = path.clone();
+        let mut refused = false;
+        for i in limit..(limit + 6) {
+            over = format!("{}/n{}", over, i);
+            if store.put(&over, b"x").is_err() {
+                refused = true;
+                break;
+            }
+        }
+        assert!(refused, "placement past the depth limit must fail, not saturate");
 
         let (nn, _) = store.nearest(&fp(&[0.0, 0.0, 0.0, 0.0])).unwrap();
         assert!(store.exists(&nn));

@@ -1,6 +1,6 @@
 [package]
 name = "horon-engine"
-version = "0.5.2"
+version = "0.6.0"
 edition = "2021"
 description = "Hyperbolic tree tensor engine - hierarchical data storage with depth-independent lookups"
 authors = ["Niels Erik Toren"]
@@ -50,7 +50,7 @@ proptest = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 
 [[bench]]
-name = "power_diagram"
+name = "spatial_queries"
 harness = false
 
 [[bench]]

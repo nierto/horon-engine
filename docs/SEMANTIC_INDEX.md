@@ -59,13 +59,14 @@ impl<P> MetricVpTree<P> {
 }
 ```
 
-Same proven algorithm as the per-bucket hyperbolic `VPTree` in
-`hash_table.rs` (Yianilos 1993: first-entry vantage point for determinism,
-median partition, tau-shrinking KNN with closer-subtree-first descent,
-inclusive pruning bounds). The bucket VPTree is dynamic (buffer + lazy
-delete) and stays as-is — the static core serves the epoch model, where
-indexes are never mutated, only discarded. Migrating the bucket tree onto
-the generic core is possible later but is not part of this change.
+Yianilos 1993: first-entry vantage point for determinism, median partition,
+tau-shrinking KNN with closer-subtree-first descent, inclusive pruning bounds.
+The static core suits the epoch model, where indexes are never mutated, only
+discarded.
+
+*(Historical: this shared its algorithm with a dynamic per-bucket `VPTree` in
+`hash_table.rs`, which served structural queries. That layer was removed in
+0.6.0 in favour of `cell_index`; the semantic side is unaffected.)*
 
 **Determinism upgrade:** all candidate ordering is lexicographic on
 `(distance, unique_id)`. Ties at the k-boundary previously depended on heap
@@ -133,10 +134,30 @@ query transition — the punctuated (calibrate → seal → query) model is the
 intended usage; worst-case degradation is to brute-force-equivalent, never
 to wrong answers.
 
+## Known sharp edge: dimension ranges past the stored width
+
+`decode_semantic_slice` zero-extends: a dimension beyond the end of a stored
+coordinate vector decodes as zero. That is deliberate and lets short vectors
+compare against long ones. The consequence at the `Store` level is worth
+stating plainly, because it is not obvious from the call site:
+
+`nearest_semantic(probe, 3, 900..1000)` on data that has four dimensions
+compares zeros against zeros. Every node ties at distance zero, the
+deterministic key tie-break picks three, and the caller gets a confident,
+reproducible, **information-free** answer. The same holds for an empty range
+like `0..0`.
+
+Nothing here is wrong arithmetic, but it sits badly with the engine's own rule
+that a plausible answer must never stand in for a proven one. Options are to
+reject a range with no overlap, return empty, or keep the behaviour and
+document it here. **Not decided, and deliberately not changed inside the 0.6.0
+index release** — it is the semantic path, which that release does not touch.
+Covered by `tests/adversarial_inputs.rs`, which asserts what happens today
+rather than endorsing it.
+
 ## Out of scope
 
 - Grid prefilter (benchmarks decide later if it's ever needed).
-- Migrating the per-bucket hyperbolic VPTree onto `MetricVpTree`.
 - Radius-based semantic queries (no current caller; `knn` only).
 - Persisting indexes into `.htt` (rebuild-on-open is cheap relative to load).
 

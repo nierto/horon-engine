@@ -1,19 +1,22 @@
 //! =============================================================================
-//! Comprehensive Test Suite: Nielsen Power Diagram + Spatial Index
+//! Spatial queries through the public storage API, and the Klein model
 //! =============================================================================
 //!
-//! Tests the full pipeline from Sarkar embedding through Klein model conversion,
-//! power cell computation, point location grid, and the public storage API.
+//! Tests the full pipeline from Sarkar embedding through Klein model
+//! conversion to `HTTStorage`'s spatial queries.
 //!
 //! Covers:
-//!   - Klein model roundtrip precision
-//!   - Power distance correctness
-//!   - Grid-vs-brute-force equivalence
-//!   - Incremental insert/delete grid preservation
-//!   - Nearest-neighbor correctness at scale
-//!   - Delaunay=Tree invariant checks
-//!   - Edge cases: boundary points, deep trees, high-degree, empty tree
-//!   - Stress tests: 1000-node trees with random queries
+//!   - Klein model roundtrip precision and known values
+//!   - Power distance correctness, and the equal-norm condition under which it
+//!     agrees with the hyperbolic Voronoi diagram (the condition whose absence
+//!     caused the 0.5.2 `SemanticDisk` defect)
+//!   - Nearest-neighbour correctness at scale, including self-nearest-neighbour
+//!   - Insert/delete consistency and bulk churn
+//!   - Edge cases: boundary points, deep chains, high-degree, empty tree
+//!   - Stress: 100-node trees with random queries
+//!
+//! Named for the power diagram until 0.6.0, when the power cells and the point
+//! location grid were removed; 31 of these 34 tests never tested either.
 
 use g_math::fixed_point::{FixedPoint, FixedVector};
 use horon_engine::{
@@ -280,15 +283,26 @@ fn test_nn_point_finds_root_at_origin() {
 
 #[test]
 fn test_nn_point_each_node_finds_itself() {
-    let (storage, paths) = build_flat_tree(10);
+    // 30 siblings, not 10: the defect this test is named for missed 4 of 30 in
+    // a flat tree and 25 of 42 in a deep one, but 0 of 10 — the original
+    // fixture was too small to fail.
+    let (storage, paths) = build_flat_tree(30);
 
     for path in &paths {
-        // Query near each node — use the find_nearest API
-        let nearest = storage.find_nearest(path, 1).unwrap();
-        // At minimum, the query should succeed and return at least one neighbor
-        // (For a flat tree, all siblings are at distance tau from root)
-        assert!(!nearest.is_empty() || paths.len() <= 1,
-            "find_nearest should return at least 1 neighbor for {}", path);
+        // Query at the node's OWN position. Distance 0 is the global minimum,
+        // so the node itself must come back — the expected answer is known a
+        // priori, with no oracle and no tolerance.
+        //
+        // This previously asserted only `!nearest.is_empty()`, which would
+        // pass while the function returned an arbitrary node every time. It
+        // did exactly that, and the test named for catching it did not.
+        let position = storage.position(path).unwrap();
+        let coords: Vec<FixedPoint> = position.coords().iter().copied().collect();
+        let (found, _) = storage.nearest_neighbor_point(&coords).unwrap();
+        assert_eq!(
+            found, *path,
+            "querying at {}'s own position returned {}", path, found
+        );
     }
 
     // Test via nearest_neighbor_point at (0,0,0,0) which is the root

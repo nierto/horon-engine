@@ -143,7 +143,6 @@ let storage = HTTStorage::new(HTTStorageConfig {
     dimension: 8,
     max_memory_nodes: 50_000,
     cache_size: 5_000,
-    grid_resolution: 128,
     ..Default::default()
 });
 storage.store("/data", b"value", Some("text/plain".into())).unwrap();
@@ -170,31 +169,30 @@ impl QueryAdapter for MyAdapter {
   spatial queries. No reader ever blocks another reader.
 - Writes stripe on the parent node: 64 lock stripes, so independent subtrees
   write in parallel.
-- The spatial index is ~61 buckets, each with its own VP-tree and lock.
+- The spatial index shards on cell id; concurrent inserts, deletes and
+  queries touch only the cells they need.
 - There is no outer lock. Every method takes `&self`; wrap in `Arc<Store>`
   and share across threads, async tasks, or HTTP handlers.
 
 ## How it works
 
 Traditional trees scale lookups with depth. Spatial indexes do not
-understand hierarchy. Five mechanisms remove the choice:
+understand hierarchy. Four mechanisms remove the choice:
 
 1. **Sarkar embedding.** Every node gets a position in the Poincare disk;
    children sit at hyperbolic distance tau from their parent via Mobius
-   reflection. The tree *is* its own spatial index.
-2. **Path lookup.** Path to node is an O(1) HashMap access, independent of
-   the spatial index. Nodes are additionally sharded into ~61 fixed buckets
-   backing the VP-tree layer; that partition does not track hyperbolic growth,
-   so occupancy is uneven and query *cost* suffers. Query *results* do not
-   depend on it.
-3. **Per-bucket VP-trees.** Range and KNN queries in O(log n) under the
-   hyperbolic metric.
-4. **Nielsen power diagram.** A Poincare-to-Klein projection and a uniform
-   grid propose candidates for point location. The grid is an accelerator, not
-   an oracle: it holds one owner per tile and Sarkar drives cells below tile
-   size within a few levels, so the answer is always decided by hyperbolic
-   distance.
-5. **Semantic dimensions.** Orthogonal to the spatial embedding: Euclidean
+   reflection. Position is derived from tree shape, never stored.
+2. **Path lookup.** Path to node is an O(1) HashMap access, entirely
+   independent of the spatial index.
+3. **The cell index.** The disk is cut into radial bands (by squared norm) and
+   angular sectors (by a diamond pseudo-angle), both sized so cells stay
+   comparable in hyperbolic terms as the disk stretches toward the boundary. A
+   query reads its own cell, then walks rings outward, and stops only when a
+   proven lower bound rules out every cell it has not visited. **Exact** — no
+   candidate cap, no window, no count-based stopping rule. Where the older
+   grid returned a tile owner and hoped, this one either proves it may stop or
+   keeps looking.
+4. **Semantic dimensions.** Orthogonal to the spatial embedding: Euclidean
    distance over user-defined dimension slices, no tree change required.
 
 ## Determinism
@@ -203,6 +201,13 @@ All geometry is gMath Q64.64 fixed point. There are no floats in the compute
 path. The same operation sequence produces bit-identical state on any
 platform; that property is what lets a write-ahead log double as a
 replication protocol. CI runs the suite on x86-64 and arm64.
+
+## Architecture
+
+`docs/ARCHITECTURE.md` is the orientation document: the three positions a node
+can have (structural, semantic, concept) and which query serves each, the three
+independent things called "modes", the layer stack, and where the limits below
+come from. Read it before the source.
 
 ## Current limitations
 
@@ -214,15 +219,20 @@ Stated plainly, because they affect how you should configure the engine.
   tree is still embedded, queried and returned correctly — it is simply outside
   the proven regime. Set it with `StoreConfig::tau()` for wider trees.
 
-- **Depth is bounded by precision, not by the format.** A node sits at
-  hyperbolic radius `depth * tau`, and the Q64.64 distance kernel holds metric
-  fidelity to a radius of about 17.5 (saturating near 22). So `tau = 1.0` gives
-  usable depth ~17, and raising `tau` for wider trees lowers reachable depth
-  proportionally.
+- **Depth is capped, and the cap is enforced.** A node sits at hyperbolic radius
+  `depth * tau`, and past a radius of 21 the Q64.64 distance kernel saturates —
+  every node the same distance from every other, ranking arbitrary. Placement
+  beyond it is **refused** rather than silently accepted. Call `max_depth()` for
+  the limit at your `tau`: 21 at the default 1.0, 26 at 0.8, 10 at 2.0. Full
+  metric fidelity ends earlier still, around radius 17; between the two,
+  ranking holds while absolute distances drift.
 
-- **`nearest` is O(log n), not O(1).** The point-location grid cannot name a
-  node whose power cell is smaller than a grid tile, which Sarkar placement
-  causes within a few levels. The grid proposes candidates only.
+- **`nearest` is not O(1).** It is a cell lookup plus a ring expansion that
+  widens until a proven lower bound rules out every unvisited cell. Exact
+  always; the number of cells scanned depends on how the tree is shaped. The
+  O(1) grid that preceded it was removed in 0.6.0 — it could not name a node
+  whose cell was smaller than a grid tile, which Sarkar placement causes within
+  a few levels.
 
 ## Performance
 
@@ -272,9 +282,9 @@ Store                         <- public API, all &self, Arc-shareable
   └─ HTTStorage               <- path normalization, CRUD, striped parent locks
        └─ HyperbolicTreeTensor     <- path-to-signature maps (DashMap)
             └─ HyperbolicTensorNetwork  <- Sarkar embedding, spatial index
-                 ├─ HyperbolicHashTable  <- ~61 buckets, per-bucket VP-trees
-                 ├─ PoincareDisk         <- hyperbolic geometry, Mobius transforms
-                 └─ PointLocationGrid    <- candidate proposer (not an oracle)
+                 ├─ CellIndex            <- radial bands x angular sectors, exact
+                 ├─ SemanticIndexCache   <- epoch-invalidated per-slice VP-trees
+                 └─ PoincareDisk         <- hyperbolic geometry, Mobius transforms
 ```
 
 ## Ecosystem

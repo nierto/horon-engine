@@ -1,13 +1,13 @@
-//! `Store::nearest` must return the *true* nearest node, not the node the
-//! point-location grid happens to name.
+//! `Store::nearest` must return the *true* nearest node, not whichever node
+//! the index finds convenient to name.
 //!
-//! The grid stores one owner per tile. Sarkar placement pushes nodes toward
-//! the boundary exponentially with depth, so a node's power cell falls below
-//! tile size within a few levels and the grid can no longer name it — in a
-//! 43-node tree only depth ≤ 2 owns any tile at all. A grid hit is therefore
-//! a *proposal*: the true nearest need not be the tile's owner, nor one of
-//! that owner's tree neighbours. `nearest` must consult the VP-tree on every
-//! query, not only when the grid misses, or it answers confidently wrong.
+//! Written against the point-location grid that 0.5.2 inherited: it stored one
+//! owner per tile, and Sarkar placement pushes nodes toward the boundary
+//! exponentially with depth, so a node's cell fell below tile size within a
+//! few levels — in a 43-node tree only depth ≤ 2 owned any tile at all. The
+//! grid answer was returned unverified, so `nearest` answered confidently
+//! wrong. The grid is gone as of 0.6.0, but the property it violated is the
+//! one worth testing, so these tests outlive it.
 //!
 //! Regression: before that change, querying at a node's own exact stored
 //! position returned a different node for 25 of 42 nodes in the deep tree

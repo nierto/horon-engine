@@ -81,7 +81,7 @@ fn band_zero_preserves_classic_placement() {
     // neighbors; nothing from outside /small may appear.
     //
     // (hardening-audit note: before the effective-radius pruning fix, the parent
-    // "/small" was silently missing from KNN results because its bucket was
+    // "/small" was silently missing from KNN results because the index was
     // wrongly pruned; the fixed query correctly ranks it among the nearest.)
     let store = Store::new();
     for i in 0..10 {

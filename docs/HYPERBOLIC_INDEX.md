@@ -1,10 +1,18 @@
 # Hyperbolic Index: radius-uniform sparse cells
 
-Status: **design, not implemented** — and no longer urgent. The depth limit
-this document was written to explain turned out to be two over-conservative
-constants, both fixed on 2026-07-30 (see *What actually limited depth*
-below). Usable nesting went from 7 to 21 with no index changes at all. What
-remains here is a **scaling** design for large trees, not a correctness fix.
+Status: **shipped in 0.6.0 as `src/cell_index.rs`** — see `docs/ARCHITECTURE.md`
+for what was actually built. This document is kept as the design record and the
+diagnostic history behind it; where the two disagree, the code is right.
+
+What shipped differs from the sketch below in one important way: correctness
+does not rest on cell sizing at all. The index proposes cells and a **proven
+lower bound** decides when the ring may stop expanding, so a badly sized cell
+costs scan time and nothing else.
+
+The depth limit this document was originally written to explain turned out to
+be two over-conservative constants, both fixed on 2026-07-30 (see *What
+actually limited depth* below). Usable nesting went from 7 to 21 with no index
+changes at all.
 
 No file-format implications either way — geometric signatures are in-memory
 only and never reach a `.htt` (verified: neither `format.rs`, `snapshot.rs`

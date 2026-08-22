@@ -25,8 +25,6 @@ pub struct HTTStorageConfig {
     pub flush_interval: u64,
     /// Whether to optimize on shutdown
     pub optimize_on_shutdown: bool,
-    /// Point location grid resolution (cells per axis, 0 = use default)
-    pub grid_resolution: usize,
     /// Sarkar embedding scale factor τ (zero = use default of 1.0)
     pub tau: FixedPoint,
 }
@@ -48,7 +46,6 @@ impl HTTStorageConfig {
             storage_path,
             flush_interval,
             optimize_on_shutdown,
-            grid_resolution: 0,
             tau: FixedPoint::from_int(0),
         }
     }
@@ -68,7 +65,6 @@ impl Default for HTTStorageConfig {
             storage_path: None,
             flush_interval: 60,
             optimize_on_shutdown: true,
-            grid_resolution: 0,
             tau: FixedPoint::from_int(0),
         }
     }
@@ -83,7 +79,6 @@ impl Debug for HTTStorageConfig {
             .field("storage_path", &self.storage_path)
             .field("flush_interval", &self.flush_interval)
             .field("optimize_on_shutdown", &self.optimize_on_shutdown)
-            .field("grid_resolution", &self.grid_resolution)
             .field("tau", &self.tau)
             .finish()
     }
@@ -135,12 +130,6 @@ impl HTTStorageConfigBuilder {
     /// Set optimize on shutdown.
     pub fn optimize_on_shutdown(mut self, optimize_on_shutdown: bool) -> Self {
         self.config.optimize_on_shutdown = optimize_on_shutdown;
-        self
-    }
-
-    /// Set point location grid resolution (0 = use default of 64).
-    pub fn grid_resolution(mut self, grid_resolution: usize) -> Self {
-        self.config.grid_resolution = grid_resolution;
         self
     }
 

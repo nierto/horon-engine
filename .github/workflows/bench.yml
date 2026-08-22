@@ -1,4 +1,4 @@
-# horon-engine benchmarks — criterion suites (power_diagram + semantic).
+# horon-engine benchmarks — criterion suites (spatial_queries + semantic).
 #
 # MANUAL TRIGGER ONLY, deliberately: benchmark numbers from shared CI
 # runners are only meaningful as *relative regression signals* between runs
@@ -35,10 +35,10 @@ jobs:
           uname -r
           rustc --version
 
-      - name: Bench power_diagram
+      - name: Bench spatial_queries
         env:
           GMATH_PROFILE: embedded
-        run: cargo bench --bench power_diagram -- ${{ inputs.filter }}
+        run: cargo bench --bench spatial_queries -- ${{ inputs.filter }}
 
       - name: Bench semantic (the O(n×d) scan wall)
         env:
