@@ -23,8 +23,9 @@ query primitive answers most questions: "what's nearby?"
 Hyperbolic space grows exponentially with radius. Trees grow exponentially
 with depth. The match is exact: the engine places every node with Sarkar's
 construction, items in the same branch cluster, items in distant branches sit
-far apart. Each leaf insertion preserves the spatial structure with O(1)
-work, so the tree is its own spatial index. Proof: [PROOF.md](PROOF.md).
+far apart. Placing a leaf is O(1) geometric work — one Möbius reflection, and
+no existing coordinate moves. Proof: [PROOF.md](PROOF.md), which is also candid
+about where the shipped embedding falls short of the theorem's hypothesis.
 
 ## In production
 
@@ -86,7 +87,7 @@ miscategorization, visible in geometry and invisible in metadata.
 
 ```toml
 [dependencies]
-horon-engine = "0.5"
+horon-engine = "0.6"
 ```
 
 All arithmetic is [gMath](https://github.com/nierto/gMath) Q64.64 fixed
@@ -113,7 +114,7 @@ Per-symbol truth lives in the docblocks: `cargo doc --open`.
 | `children(path)` | List direct children. |
 | `list(prefix)` | List the full subtree. |
 | `set_meta(key, k, v)` / `get_meta(key)` | Per-node key-value metadata. |
-| `nearest(coords)` | True nearest node to a point. O(log n): the grid proposes candidates, hyperbolic distance decides. |
+| `nearest(coords)` | True nearest node to a point. Exact: rings expand until a proven bound rules out the rest. |
 | `nearest_k(coords, k)` | The k nearest nodes to a point. |
 | `neighbors(key, k)` | The k nearest neighbors of a stored node. |
 | `find_within(key, r)` | All nodes within hyperbolic radius r. |
@@ -133,8 +134,8 @@ Per-symbol truth lives in the docblocks: `cargo doc --open`.
 
 ## HTTStorage, the layer below
 
-`Store` wraps `HTTStorage`. Reach for it when you need direct control over
-embedding dimension or grid resolution:
+`Store` wraps `HTTStorage`. Reach for it when you need direct control over the
+embedding dimension:
 
 ```rust
 use horon_engine::{HTTStorage, HTTStorageConfig};
@@ -240,26 +241,30 @@ Measured 2026-07 on an i7-7700 (4c/8t) with `GMATH_PROFILE=embedded`. Full
 tables, machine specs, and reproduction commands:
 [BENCHMARKS.md](BENCHMARKS.md).
 
-| Operation | Measured cost |
-|-----------|---------------|
-| `get` | ~0.9 µs |
-| `exists` | ~0.1 µs |
-| `put` (into an existing populated tree) | ~1 µs |
-| `put` (fresh flat tree, n ≤ 100) | ~3-7 ms/node (grid-tile assignment worst case) |
-| `nearest` (power diagram, full API) | ~250-290 µs |
-| `neighbors` (VP-tree KNN, full API) | ~3-10 ms (exact 0-ULP distance per candidate) |
-| `remove` | ~0.2-3 ms |
-| `nearest_semantic` (lazy per-slice VP-tree, warm) | ~283 µs at 10k nodes, ~309 µs at 100k, d=8 |
-| `nearest_semantic` (first query after a semantic write) | ~1.2 s at 10k nodes; index rebuild, amortizes after ~7 queries |
+| Operation | Measured cost | vs 0.5.x |
+|-----------|---------------|----------|
+| `get` | ~0.9 µs | — |
+| `exists` | ~0.1 µs | — |
+| `put` (into an existing populated tree) | ~1.2 µs | — |
+| `put` (fresh flat tree, n ≤ 100) | 46.8–95.6 µs/node | 37–150× |
+| `remove` | 7.9–30.7 µs/op | 25–98× |
+| `nearest` (full API) | 51–99 µs, n = 10…200 | 3–5× |
+| `nearest` at the origin | 7.6 µs | 10.8× |
+| `neighbors` (k = 1…5, full API) | 38–223 µs | 19–55× |
+| `nearest_semantic` (lazy per-slice VP-tree, warm) | ~283 µs at 10k nodes, ~309 µs at 100k, d=8 | — |
+| `nearest_semantic` (first query after a semantic write) | ~1.2 s at 10k nodes; index rebuild, amortizes after ~7 queries | — |
 
-Geometric *primitives* run in nanoseconds (grid probe ~15 ns, power distance
-~24 ns). Full-API queries pay for exact hyperbolic verification of every
-candidate. Concurrent read throughput: ~2.6M reads/sec on 8 threads.
+Structural rows re-measured 2026-08-22 for 0.6.0 on the machine above.
+Semantic rows are unchanged by that release.
 
-**These rows predate 0.5.0**, whose proxy-space release cut the cost of
-every ranking loop (bulk insert and structural KNN most of all — fresh-tree
-insertion dropped roughly an order of magnitude). Treat the table as an
-upper bound until BENCHMARKS.md is re-measured on the reference machine.
+Full-API queries pay for exact hyperbolic verification of every surviving
+candidate — that is the guarantee, not an inefficiency. The index's job is to
+make the number of survivors small, and the ring bound is what proves it may
+stop. Concurrent read throughput: ~2.6M reads/sec on 8 threads.
+
+Read the `nearest` comparison honestly: the 0.5.x figure is the cost of an
+answer that was frequently *wrong*, so it measures the replacement of a broken
+thing rather than a tuning win.
 
 ## Persistence
 
