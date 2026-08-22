@@ -19,15 +19,15 @@
 //!   O(1) — they cost as many cells as the bound needs to rule out, which depends on
 //!   tree shape; see BENCHMARKS.md for measured figures. Semantic queries use lazy
 //!   per-slice VP-trees above a node floor and a linear scan below — see
-//!   `Store::nearest_semantic` and `docs/SEMANTIC_INDEX.md`.
+//!   `Store::nearest_semantic` and [SEMANTIC_INDEX.md](https://github.com/nierto/horon-engine/blob/main/docs/SEMANTIC_INDEX.md).
 //! - **Spatial Queries**: Find nearest neighbors and range queries in hyperbolic space
-//! - **Architecture**: `docs/ARCHITECTURE.md` — the three coordinate systems and
+//! - **Architecture**: [ARCHITECTURE.md](https://github.com/nierto/horon-engine/blob/main/docs/ARCHITECTURE.md) — the three coordinate systems and
 //!   which query serves each. Read it first; the distinction is easy to get backwards.
 //! - **Mathematically Grounded**: Sarkar embedding (see PROOF.md). PROOF.md's Delaunay
 //!   guarantee is conditional on `tau >= -log(tan(pi/(2*d_max)))` and the default
 //!   `tau = 1.0` satisfies it only up to `d_max ~= 4.5` (see `StoreConfig::tau`) — but
 //!   since 0.6.0 no query path depends on it. A violated bound costs spacing quality,
-//!   not correctness. See `docs/GEOMETRY_TRACK.md`.
+//!   not correctness. See [GEOMETRY_TRACK.md](https://github.com/nierto/horon-engine/blob/main/docs/GEOMETRY_TRACK.md).
 //! - **Deterministic Results**: Q64.64 fixed-point arithmetic for bit-identical results across platforms
 //! - **Extensible**: Modular architecture with pluggable components and extension system
 //!

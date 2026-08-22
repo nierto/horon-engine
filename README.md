@@ -318,9 +318,9 @@ Store                         <- public API, all &self, Arc-shareable
 
 - **Semantic disk**: the concept taxonomy embedded hyperbolically, positions
   derived from affinity dimensions
-  ([docs/SEMANTIC_DISK.md](docs/SEMANTIC_DISK.md)).
+  ([docs/SEMANTIC_DISK.md](https://github.com/nierto/horon-engine/blob/main/docs/SEMANTIC_DISK.md)).
 - **Semantic spatial index**: lazy per-slice VP-trees, ~690x faster at 10k
-  nodes ([docs/SEMANTIC_INDEX.md](docs/SEMANTIC_INDEX.md)), plus
+  nodes ([docs/SEMANTIC_INDEX.md](https://github.com/nierto/horon-engine/blob/main/docs/SEMANTIC_INDEX.md)), plus
   `find_similar` and `find_outliers`.
 - In [Horon](https://github.com/nierto/horon): temporal epochs (v0.6.0) and
   WAL-based replication (v0.5.0).

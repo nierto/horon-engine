@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.1
+
+Documentation only. No code change, no API change; `0.6.0` and `0.6.1` are
+behaviourally identical.
+
+0.6.0's README was updated in part and not in whole, and crates.io renders the
+README from the published tarball rather than from the repository — so the
+landing page for the release advertised the previous version.
+
+- **The install snippet said `horon-engine = "0.5"`.** That is the line people
+  copy.
+- **The performance table was the pre-0.6.0 set**, still crediting a grid probe
+  and a power distance, and carrying a note that its rows predated 0.5.0.
+  Replaced with the re-measured structural rows and a comparison column;
+  semantic rows are unaffected by 0.6.0 and now say so.
+- `nearest` was still described as "O(log n): the grid proposes candidates".
+- `HTTStorage` was still offered as the way to set a grid resolution that no
+  longer exists.
+- README and crate-level docs linked into `docs/`, which is not packaged, so
+  those links resolved to nothing on crates.io and docs.rs. They are absolute
+  now.
+
 ## 0.6.0
 
 Index replacement. `nearest`, `nearest_k`, `neighbors` and `find_within` are
