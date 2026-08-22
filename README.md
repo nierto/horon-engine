@@ -205,20 +205,33 @@ replication protocol. CI runs the suite on x86-64 and arm64.
 
 ## Architecture
 
-`docs/ARCHITECTURE.md` is the orientation document: the three positions a node
+[ARCHITECTURE.md](https://github.com/nierto/horon-engine/blob/main/docs/ARCHITECTURE.md)
+is the orientation document: the three positions a node
 can have (structural, semantic, concept) and which query serves each, the three
 independent things called "modes", the layer stack, and where the limits below
 come from. Read it before the source.
 
-## Current limitations
+```
+Store                         <- public API, all &self, Arc-shareable
+  └─ HTTStorage               <- path normalization, CRUD, striped parent locks
+       └─ HyperbolicTreeTensor     <- path-to-signature maps (DashMap)
+            └─ HyperbolicTensorNetwork  <- Sarkar embedding, spatial index
+                 ├─ CellIndex            <- radial bands x angular sectors, exact
+                 ├─ SemanticIndexCache   <- epoch-invalidated per-slice VP-trees
+                 └─ PoincareDisk         <- hyperbolic geometry, Mobius transforms
+```
+
+## Limits worth knowing
 
 Stated plainly, because they affect how you should configure the engine.
 
 - **`tau` must scale with fan-out.** PROOF.md's Delaunay guarantee holds only
   when `tau >= -log(tan(pi / (2 * d_max)))` for the tree's maximum node degree.
-  The default `tau = 1.0` satisfies that up to `d_max ~= 4.5`. Beyond it the
-  tree is still embedded, queried and returned correctly — it is simply outside
-  the proven regime. Set it with `StoreConfig::tau()` for wider trees.
+  The default `tau = 1.0` satisfies that up to `d_max ~= 4.5`, and nothing
+  enforces it. Since 0.6.0 no query path depends on the Delaunay identity, so
+  exceeding it costs *spacing quality* — crowded siblings, more nodes per cell,
+  longer scans — and never correctness. Set it with `StoreConfig::tau()` for
+  wider trees, remembering that a larger tau spends the depth budget faster.
 
 - **Depth is capped, and the cap is enforced.** A node sits at hyperbolic radius
   `depth * tau`, and past a radius of 21 the Q64.64 distance kernel saturates —
@@ -234,6 +247,19 @@ Stated plainly, because they affect how you should configure the engine.
   O(1) grid that preceded it was removed in 0.6.0 — it could not name a node
   whose cell was smaller than a grid tile, which Sarkar placement causes within
   a few levels.
+
+- **Extreme fan-out weakens angular spacing.** On the order of 1000+ siblings
+  under one parent, position signatures can quantize to the same slot;
+  insertion probes forward to the next free one, so placement stays correct
+  but the golden-angle spacing guarantee softens. Keep realistic tree shapes.
+
+- **Semantic dimensions cap at 255 per node** — 16 reserved, up to 239
+  user-defined. Distances run over any slice of them.
+
+- **The engine is in-memory.** Durability and the on-disk layout live in
+  [Horon](https://github.com/nierto/horon). Concurrency does *not*: every
+  method takes `&self`, reads are lock-free, and writes stripe on the parent
+  node — see [Concurrency](#concurrency).
 
 ## Performance
 
@@ -280,39 +306,12 @@ htt.put("/config/db", b"postgres://localhost")?;
 htt.compact()?;
 ```
 
-## Architecture
-
-```
-Store                         <- public API, all &self, Arc-shareable
-  └─ HTTStorage               <- path normalization, CRUD, striped parent locks
-       └─ HyperbolicTreeTensor     <- path-to-signature maps (DashMap)
-            └─ HyperbolicTensorNetwork  <- Sarkar embedding, spatial index
-                 ├─ CellIndex            <- radial bands x angular sectors, exact
-                 ├─ SemanticIndexCache   <- epoch-invalidated per-slice VP-trees
-                 └─ PoincareDisk         <- hyperbolic geometry, Mobius transforms
-```
-
 ## Ecosystem
 
 - **[gMath](https://github.com/nierto/gMath)**: Q64.64 fixed-point
   arithmetic with ZASC-Binary transcendentals.
 - **[Horon](https://github.com/nierto/horon)**: `.htt` WAL persistence over
   this engine.
-
-## Limits worth knowing
-
-- Depth is a precision budget: Q64.64 supports roughly 44/τ levels before
-  sibling separation degrades near the disk boundary; the engine warns as
-  inserts approach it.
-- Extreme fan-out (on the order of 1000+ siblings under one parent) can
-  quantize to colliding position signatures; insertion probes forward to
-  the next free slot, so placement stays correct but the golden-angle
-  spacing guarantee weakens. Keep realistic tree shapes.
-- Semantic dimensions are capped at 255 per node (16 reserved + up to 239
-  user); distances run over any slice of them.
-- The engine is in-memory and single-process by design — durability,
-  concurrent readers, and the on-disk layout live in
-  [Horon](https://github.com/nierto/horon).
 
 ## Recent work
 
