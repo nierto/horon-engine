@@ -256,10 +256,13 @@ Stated plainly, because they affect how you should configure the engine.
 - **Semantic dimensions cap at 255 per node** — 16 reserved, up to 239
   user-defined. Distances run over any slice of them.
 
-- **The engine is in-memory.** Durability and the on-disk layout live in
-  [Horon](https://github.com/nierto/horon). Concurrency does *not*: every
-  method takes `&self`, reads are lock-free, and writes stripe on the parent
-  node — see [Concurrency](#concurrency).
+- **The engine is in-memory and single-process.** Durability, the on-disk
+  layout, and *cross-process* readers live in
+  [Horon](https://github.com/nierto/horon), whose `HoronReader` opens a `.htt`
+  read-only and unlocked alongside a writer. In-process concurrency is the
+  engine's own: every method takes `&self`, reads are lock-free, writes stripe
+  on the parent node, and 8 threads sustain ~4.5M reads/sec — see
+  [Concurrency](#concurrency).
 
 ## Performance
 
