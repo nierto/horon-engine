@@ -535,13 +535,25 @@ impl HyperbolicTreeTensor {
 
     /// Update the value of a node at the specified path.
     pub fn update_value(&self, path: &str, value: Vec<u8>) -> IntegrationResult<()> {
-        let uid = self
+        // The path_map guard is held across the network read on purpose.
+        // `embed_existing` swaps a stub for an embedded node by inserting the
+        // new signature into `path_map` and THEN retiring the old node. A
+        // reader that resolves the uid and drops the guard first can be
+        // descheduled in that window and then look up a uid the network has
+        // already released — a spurious NotFound for a key that never went
+        // away. Holding the shard guard makes the swap's `path_map.insert`
+        // wait. This is what `get()` has always done; these four did not.
+        // No inversion: the writer releases every node lock inside `add_node`
+        // before it touches `path_map`, so the orders never interleave.
+        let guard = self
             .path_map
             .get(path)
-            .map(|r| r.value().unique_id())
             .ok_or_else(|| IntegrationError::NotFound(format!("Node at path {} not found", path)))?;
+        let uid = guard.value().unique_id();
+        let ok = self.tensor_network.update_node_value(&uid, value);
+        drop(guard);
 
-        if self.tensor_network.update_node_value(&uid, value) {
+        if ok {
             Ok(())
         } else {
             Err(IntegrationError::NotFound(format!("Node with uid {} not found in network", uid)))
@@ -550,13 +562,25 @@ impl HyperbolicTreeTensor {
 
     /// Set a metadata key-value pair on a node.
     pub fn set_node_metadata(&self, path: &str, key: &str, value: &str) -> IntegrationResult<()> {
-        let uid = self
+        // The path_map guard is held across the network read on purpose.
+        // `embed_existing` swaps a stub for an embedded node by inserting the
+        // new signature into `path_map` and THEN retiring the old node. A
+        // reader that resolves the uid and drops the guard first can be
+        // descheduled in that window and then look up a uid the network has
+        // already released — a spurious NotFound for a key that never went
+        // away. Holding the shard guard makes the swap's `path_map.insert`
+        // wait. This is what `get()` has always done; these four did not.
+        // No inversion: the writer releases every node lock inside `add_node`
+        // before it touches `path_map`, so the orders never interleave.
+        let guard = self
             .path_map
             .get(path)
-            .map(|r| r.value().unique_id())
             .ok_or_else(|| IntegrationError::NotFound(format!("Node at path {} not found", path)))?;
+        let uid = guard.value().unique_id();
+        let ok = self.tensor_network.set_node_metadata_entry(&uid, key, value);
+        drop(guard);
 
-        if self.tensor_network.set_node_metadata_entry(&uid, key, value) {
+        if ok {
             Ok(())
         } else {
             Err(IntegrationError::NotFound(format!("Node with uid {} not found in network", uid)))
@@ -565,13 +589,25 @@ impl HyperbolicTreeTensor {
 
     /// Set semantic coordinates on a node (raw Q64.64 bytes, 16 bytes per dimension).
     pub fn set_semantic(&self, path: &str, coords: Vec<u8>) -> IntegrationResult<()> {
-        let uid = self
+        // The path_map guard is held across the network read on purpose.
+        // `embed_existing` swaps a stub for an embedded node by inserting the
+        // new signature into `path_map` and THEN retiring the old node. A
+        // reader that resolves the uid and drops the guard first can be
+        // descheduled in that window and then look up a uid the network has
+        // already released — a spurious NotFound for a key that never went
+        // away. Holding the shard guard makes the swap's `path_map.insert`
+        // wait. This is what `get()` has always done; these four did not.
+        // No inversion: the writer releases every node lock inside `add_node`
+        // before it touches `path_map`, so the orders never interleave.
+        let guard = self
             .path_map
             .get(path)
-            .map(|r| r.value().unique_id())
             .ok_or_else(|| IntegrationError::NotFound(format!("Node at path {} not found", path)))?;
+        let uid = guard.value().unique_id();
+        let ok = self.tensor_network.set_node_semantic(&uid, coords);
+        drop(guard);
 
-        if self.tensor_network.set_node_semantic(&uid, coords) {
+        if ok {
             Ok(())
         } else {
             Err(IntegrationError::NotFound(format!("Node with uid {} not found in network", uid)))
@@ -580,14 +616,25 @@ impl HyperbolicTreeTensor {
 
     /// Get semantic coordinates for a node (raw Q64.64 bytes).
     pub fn get_semantic(&self, path: &str) -> IntegrationResult<Vec<u8>> {
-        let uid = self
+        // The path_map guard is held across the network read on purpose.
+        // `embed_existing` swaps a stub for an embedded node by inserting the
+        // new signature into `path_map` and THEN retiring the old node. A
+        // reader that resolves the uid and drops the guard first can be
+        // descheduled in that window and then look up a uid the network has
+        // already released — a spurious NotFound for a key that never went
+        // away. Holding the shard guard makes the swap's `path_map.insert`
+        // wait. This is what `get()` has always done; these four did not.
+        // No inversion: the writer releases every node lock inside `add_node`
+        // before it touches `path_map`, so the orders never interleave.
+        let guard = self
             .path_map
             .get(path)
-            .map(|r| r.value().unique_id())
             .ok_or_else(|| IntegrationError::NotFound(format!("Node at path {} not found", path)))?;
+        let uid = guard.value().unique_id();
+        let found = self.tensor_network.get_node_semantic(&uid);
+        drop(guard);
 
-        self.tensor_network
-            .get_node_semantic(&uid)
+        found
             .ok_or_else(|| IntegrationError::NotFound(format!("Node with uid {} not found in network", uid)))
     }
 

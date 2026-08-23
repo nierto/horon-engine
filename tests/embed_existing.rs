@@ -6,7 +6,7 @@
 //! Ancestors embed automatically; the operation is idempotent; readers
 //! racing an embed never observe the key missing.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use horon_engine::Store;
@@ -128,23 +128,42 @@ fn readers_never_lose_the_key_during_embed() {
         store.set_semantic(&key, coords(&[i as f64 * 0.01, 0.3])).unwrap();
     }
 
+    const READERS: usize = 4;
     let stop = Arc::new(AtomicBool::new(false));
+    // Readers must be live *during* the embed or this test proves nothing.
+    // Spawning them and starting immediately does not guarantee that: a
+    // thread may not be scheduled before `embed_all` finishes, and since
+    // 0.6.0 made embedding 37-150x faster that is a real outcome, not a
+    // theoretical one. It showed up as an intermittent "reader did no work".
+    // Each reader therefore does one pass and reports ready; the embed does
+    // not start until all of them have.
+    let ready = Arc::new(AtomicUsize::new(0));
     let mut readers = Vec::new();
-    for t in 0..4 {
+    for t in 0..READERS {
         let store = Arc::clone(&store);
         let stop = Arc::clone(&stop);
+        let ready = Arc::clone(&ready);
         readers.push(std::thread::spawn(move || {
             let mut checks = 0u64;
-            while !stop.load(Ordering::Relaxed) {
+            loop {
                 let key = format!("/r/{:02}", (checks as usize * 7 + t * 13) % 50);
                 let data = store.get(&key).expect("key vanished during embed");
                 assert_eq!(data, b"payload");
                 let sem = store.get_semantic(&key).expect("semantic read failed");
                 assert!(!sem.is_empty(), "coords vanished during embed");
                 checks += 1;
+                if checks == 1 {
+                    ready.fetch_add(1, Ordering::Release);
+                }
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
             }
             checks
         }));
+    }
+    while ready.load(Ordering::Acquire) < READERS {
+        std::hint::spin_loop();
     }
 
     let upgraded = store.embed_all("/r").unwrap();
@@ -152,7 +171,10 @@ fn readers_never_lose_the_key_during_embed() {
 
     stop.store(true, Ordering::Relaxed);
     for r in readers {
-        assert!(r.join().unwrap() > 0, "reader did no work");
+        assert!(
+            r.join().unwrap() > 0,
+            "reader did no work — the ready barrier should make this impossible",
+        );
     }
 
     // Post-embed: fully spatial.

@@ -5,6 +5,27 @@
 Three honesty fixes. No behavioural change to a correct call; each replaces a
 silent or vacuous answer with a stated one.
 
+### Fixed
+
+- **A reader could see `NotFound` for a key that never went away.**
+  `get_semantic`, `set_semantic`, `update_value` and `set_node_metadata`
+  resolved a path to a `unique_id` and *dropped the `path_map` guard* before
+  looking that id up in the network. `embed_existing` swaps a data-only node
+  for an embedded one by inserting the new signature into `path_map` and then
+  retiring the old node, so a reader descheduled in that window looked up an id
+  the network had just released. All four now hold the guard across both reads,
+  which is what `get()` has always done — and why `get()` never exhibited it.
+
+  Found because 0.6.0 made embedding **37–150× faster**. The regression test
+  that guards this behaviour spawned reader threads and started the embed
+  immediately; embedding 51 nodes used to take long enough that the readers
+  always overlapped it. Once it took microseconds, the readers frequently
+  finished *after* the embed and the test began failing on its own liveness
+  assertion (`reader did no work`) rather than on the defect it was written to
+  catch. The test now waits for every reader to complete a pass before
+  embedding, which both removes the false failure and makes the overlap it
+  claims to test actually happen. The defect surfaced immediately after.
+
 ### Added
 
 - **`constants::max_degree_for_tau`** and **`HyperbolicTensorNetwork::max_degree`**
