@@ -227,11 +227,13 @@ Stated plainly, because they affect how you should configure the engine.
 
 - **`tau` must scale with fan-out.** PROOF.md's Delaunay guarantee holds only
   when `tau >= -log(tan(pi / (2 * d_max)))` for the tree's maximum node degree.
-  The default `tau = 1.0` satisfies that up to `d_max ~= 4.5`, and nothing
-  enforces it. Since 0.6.0 no query path depends on the Delaunay identity, so
-  exceeding it costs *spacing quality* — crowded siblings, more nodes per cell,
-  longer scans — and never correctness. Set it with `StoreConfig::tau()` for
-  wider trees, remembering that a larger tau spends the depth budget faster.
+  The default `tau = 1.0` satisfies that up to `d_max = 4`. Exceeding it is
+  **warned about, once per parent**, on the crossing — since 0.6.0 no query path
+  depends on the Delaunay identity, so it costs *spacing quality* (crowded
+  siblings, more nodes per cell, longer scans) and never correctness. Set tau
+  with `StoreConfig::tau()` for wider trees, remembering that a larger tau
+  spends the depth budget faster: `tau = 5.094` carries 256 children but caps
+  depth at 4.
 
 - **Depth is capped, and the cap is enforced.** A node sits at hyperbolic radius
   `depth * tau`, and past a radius of 21 the Q64.64 distance kernel saturates —
@@ -253,8 +255,12 @@ Stated plainly, because they affect how you should configure the engine.
   insertion probes forward to the next free one, so placement stays correct
   but the golden-angle spacing guarantee softens. Keep realistic tree shapes.
 
-- **Semantic dimensions cap at 255 per node** — 16 reserved, up to 239
-  user-defined. Distances run over any slice of them.
+- **The engine sets no ceiling on semantic dimensions.** It validates only that
+  a coordinate vector is a whole number of Q64.64 values (a multiple of 16
+  bytes); distances run over any slice. The familiar 255-per-node limit — 16
+  reserved for access bands, 239 user-defined — is
+  [Horon](https://github.com/nierto/horon)'s `.htt` header, not this crate's.
+  Storing wider vectors here works and will not round-trip through a `.htt`.
 
 - **The engine is in-memory and single-process.** Durability, the on-disk
   layout, and *cross-process* readers live in
