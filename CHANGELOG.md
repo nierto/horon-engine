@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+Three honesty fixes. No behavioural change to a correct call; each replaces a
+silent or vacuous answer with a stated one.
+
+### Added
+
+- **`constants::max_degree_for_tau`** and **`HyperbolicTensorNetwork::max_degree`**
+  — the inverse of `PROOF.md`'s hypothesis, `d_max = pi / (2 * arctan(e^-tau))`.
+  Reproduces the published table exactly: tau = 1.0 gives 4 (documented as
+  `d_max ~= 4.46`), and 256 children need tau >= 5.094.
+
+### Changed
+
+- **A parent exceeding `max_degree(tau)` now warns**, once, on the crossing.
+  `CONTRACT.scn.md` has always declared `tau >= -log(tan(pi / (2 * d_max)))`
+  and nothing checked it. Since 0.6.0 a violation costs spacing quality —
+  crowded siblings, more nodes per cell, longer scans — and never correctness,
+  so this is a warning and not an error. Computed once per network; the insert
+  path pays one integer comparison.
+
+- **Dropped results are logged instead of vanishing.** `nearest_k` and
+  `neighbors` translate index hits back to paths through `id_to_path` and
+  silently skipped anything missing, so a caller could ask for `k` and get
+  fewer with nothing saying why. A delete removes the path before the index
+  entry, so a concurrent query seeing an unmapped id is benign and
+  self-correcting — but a *persistent* count means `id_to_path` has drifted
+  from the index, which no other check would catch. Self-exclusion in
+  `neighbors` is discounted and not counted as a drop.
+
+- **Semantic slices that cannot carry information are rejected.**
+  `decode_semantic_slice` zero-extends by design, which lets a short vector
+  compare against a long one. Two cases abused it: an **empty** range, and one
+  starting past the end of the *query's own* coordinates. Either way every
+  candidate tied at distance zero and the deterministic key tie-break picked
+  `k` of them — a confident, reproducible, information-free answer.
+  `nearest_semantic`, `neighbors_semantic` and `find_similar` now return
+  `InvalidOperation`; `find_outliers` rejects the empty range (it has no single
+  query vector to measure against). A range that merely *extends past* the
+  data is still valid — that is zero-extension working as intended.
+
 ## 0.6.1
 
 Documentation only. No code change, no API change; `0.6.0` and `0.6.1` are

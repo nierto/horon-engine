@@ -183,6 +183,9 @@ pub struct HyperbolicTensorNetwork {
     tau: FixedPoint,
     /// Per-parent child count for Sarkar cone angular placement
     child_counts: DashMap<String, u32>,
+    /// Largest degree for which PROOF.md's Delaunay hypothesis holds at this
+    /// tau. Precomputed: deriving it costs an `exp` and an `atan`.
+    max_degree: u32,
     /// Lazy per-slice VP-tree cache for semantic KNN, invalidated by a
     /// semantic-epoch counter (see `docs/SEMANTIC_INDEX.md`)
     semantic_index: SemanticIndexCache,
@@ -209,6 +212,7 @@ impl HyperbolicTensorNetwork {
             root_signature: Mutex::new(None),
             tau,
             child_counts: DashMap::new(),
+            max_degree: constants::max_degree_for_tau(tau),
             semantic_index: SemanticIndexCache::new(),
         }
     }
@@ -491,14 +495,39 @@ impl HyperbolicTensorNetwork {
     /// for a hinted (snapshot-replay) insert it tracks the running maximum so
     /// later auto-increment inserts never collide with a replayed index.
     fn commit_child_index(&self, parent_id: &str, child_index_hint: Option<u32>, child_index: u32) {
-        let next = match child_index_hint {
+        let (prev, next) = match child_index_hint {
             Some(hint) => {
                 let current = self.child_counts.get(parent_id).map(|r| *r.value()).unwrap_or(0);
-                current.max(hint + 1)
+                (current, current.max(hint + 1))
             }
-            None => child_index + 1,
+            None => (child_index, child_index + 1),
         };
         self.child_counts.insert(parent_id.to_string(), next);
+
+        // `CONTRACT.scn.md` declares `tau >= -log(tan(pi / (2 * d_max)))` and
+        // nothing used to check it. Since 0.6.0 a violation costs spacing
+        // quality — crowded siblings, more nodes per cell, longer scans — and
+        // never correctness, so this is a warning rather than an error. Fired
+        // once per parent, on the crossing, so a wide tree does not spam.
+        if prev <= self.max_degree && next > self.max_degree {
+            log::warn!(
+                "node '{}' now has {} children, past the {} that tau = {} supports \
+                 (PROOF.md requires tau >= -log(tan(pi / (2 * d_max)))). Placement and \
+                 query results stay correct; siblings crowd, so cells hold more nodes \
+                 and scans lengthen. Raise tau via StoreConfig::tau() for wide trees.",
+                parent_id,
+                next,
+                self.max_degree,
+                self.tau.to_f64(),
+            );
+        }
+    }
+
+    /// The largest node degree for which `PROOF.md`'s Delaunay hypothesis holds
+    /// at this network's tau. Exceeding it is a spacing-quality matter, not a
+    /// correctness one — see `docs/GEOMETRY_TRACK.md`.
+    pub fn max_degree(&self) -> u32 {
+        self.max_degree
     }
 
     /// Get a node by its signature (returns cloned value).

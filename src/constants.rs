@@ -133,6 +133,34 @@ pub fn min_safe_disk_gap() -> FixedPoint {
     FixedPoint::from_int(1) - edge * edge
 }
 
+/// The largest node degree for which `PROOF.md`'s Delaunay hypothesis holds
+/// at the given tau.
+///
+/// The theorem requires `tau >= -log(tan(pi / (2 * d_max)))`. Inverted:
+///
+/// ```text
+/// d_max = pi / (2 * arctan(e^-tau))
+/// ```
+///
+/// Checks against the published table: tau = 1.0 gives 4 (the documented
+/// `d_max ~= 4.46`), and 256 children need tau >= 5.094, which gives 256.
+///
+/// Computed once per network, never on an insert path — it costs an `exp` and
+/// an `atan`.
+#[inline]
+pub fn max_degree_for_tau(tau: FixedPoint) -> u32 {
+    let denom = FixedPoint::from_int(2) * (-tau).exp().atan();
+    if denom <= FixedPoint::from_int(0) {
+        return u32::MAX;
+    }
+    let d = pi() / denom;
+    if d <= FixedPoint::from_int(0) {
+        1
+    } else {
+        d.to_int().max(1) as u32
+    }
+}
+
 /// Pi, parsed from string for maximum precision
 #[inline]
 pub fn pi() -> FixedPoint {
@@ -207,4 +235,34 @@ pub fn quantize_position(x: FixedPoint) -> i32 {
         scaled + half()
     };
     rounded.to_int()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The inverse of PROOF.md's hypothesis, checked against the two anchors
+    /// the documentation already publishes: tau = 1.0 supports `d_max ~= 4.46`,
+    /// and 256 children need `tau >= 5.094`.
+    #[test]
+    fn max_degree_matches_the_published_tau_table() {
+        assert_eq!(max_degree_for_tau(FixedPoint::from_f64(1.0)), 4);
+        assert_eq!(max_degree_for_tau(FixedPoint::from_f64(5.094)), 256);
+        // Monotone: more spacing supports more children.
+        let mut prev = 0;
+        for t in [0.5f64, 0.8, 1.0, 1.5, 2.0, 3.0, 5.0] {
+            let d = max_degree_for_tau(FixedPoint::from_f64(t));
+            assert!(d >= prev, "max_degree must not fall as tau rises: {t} gave {d}");
+            prev = d;
+        }
+    }
+
+    /// A degenerate tau must not yield a bound of zero, which would silence
+    /// the warning this exists to raise.
+    #[test]
+    fn max_degree_is_at_least_one_for_any_tau() {
+        for t in [0.0f64, 0.001, 40.0] {
+            assert!(max_degree_for_tau(FixedPoint::from_f64(t)) >= 1);
+        }
+    }
 }

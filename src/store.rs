@@ -386,6 +386,42 @@ impl Store {
     // Semantic dimensional distance queries
     // -----------------------------------------------------------------------
 
+    /// Reject a dimension slice that cannot carry information.
+    ///
+    /// `decode_semantic_slice` zero-extends: a dimension past the end of a
+    /// stored vector reads as zero. That is deliberate and lets a short vector
+    /// compare against a long one. Two cases abuse it:
+    ///
+    /// - an **empty** range compares nothing, so every pair scores 0;
+    /// - a range starting past the end of the *query's own* coordinates means
+    ///   the query contributes zeros across the whole slice.
+    ///
+    /// Either way every candidate ties at distance zero, the deterministic
+    /// key tie-break picks k of them, and the caller receives a confident,
+    /// reproducible, information-free answer. That is the one thing this
+    /// engine refuses to do, so it is an error instead.
+    ///
+    /// A range that merely *extends past* the data is still fine — that is
+    /// zero-extension working as designed.
+    fn check_slice(dim_range: &Range<usize>, query_dims: usize, what: &str) -> Result<(), StoreError> {
+        if dim_range.start >= dim_range.end {
+            return Err(StoreError::InvalidOperation(format!(
+                "dimension range {}..{} is empty, so every node would tie at distance \
+                 zero and the ranking would be arbitrary",
+                dim_range.start, dim_range.end
+            )));
+        }
+        if dim_range.start >= query_dims {
+            return Err(StoreError::InvalidOperation(format!(
+                "dimension range {}..{} starts past the {} of the {}, which has {} \
+                 dimension(s); every value compared would be a zero-extension and the \
+                 ranking would be arbitrary",
+                dim_range.start, dim_range.end, "end", what, query_dims
+            )));
+        }
+        Ok(())
+    }
+
     /// Find the k nearest nodes by Euclidean distance across a dimensional slice.
     ///
     /// A dimensional slice selects which semantic dimensions to compare.
@@ -419,6 +455,7 @@ impl Store {
                 query_coords.len()
             )));
         }
+        Self::check_slice(&dim_range, query_coords.len() / 16, "query vector")?;
         let results = self.inner.nearest_semantic(query_coords, k, &dim_range)?;
         Ok(results)
     }
@@ -438,6 +475,8 @@ impl Store {
         k: usize,
         dim_range: Range<usize>,
     ) -> Result<Vec<(String, FixedPoint)>, StoreError> {
+        let anchor_dims = self.get_semantic(path).map(|c| c.len() / 16).unwrap_or(0);
+        Self::check_slice(&dim_range, anchor_dims, "anchor node")?;
         let results = self.inner.neighbors_semantic(path, k, &dim_range)?;
         Ok(results)
     }
@@ -493,6 +532,15 @@ impl Store {
             return Err(StoreError::InvalidOperation(format!(
                 "z_threshold must be a positive number; got {}",
                 z_threshold.to_f64()
+            )));
+        }
+        // No single query vector here, so only the empty-range case is
+        // checkable without scanning the population.
+        if dim_range.start >= dim_range.end {
+            return Err(StoreError::InvalidOperation(format!(
+                "dimension range {}..{} is empty, so every node would tie at distance \
+                 zero and no node could be an outlier",
+                dim_range.start, dim_range.end
             )));
         }
 

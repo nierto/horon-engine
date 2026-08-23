@@ -849,13 +849,39 @@ impl HyperbolicTreeTensor {
             ));
         }
 
-        let mut paths = Vec::with_capacity(results.len());
+        let found = results.len();
+        let mut paths = Vec::with_capacity(found);
         for (uid, dist) in results {
             if let Some(p) = self.id_to_path.get(&uid) {
                 paths.push((p.value().clone(), dist));
             }
         }
+        Self::note_unmapped(found, paths.len(), "nearest_neighbor_point_k");
         Ok(paths)
+    }
+
+    /// Report results the index found but that had no path.
+    ///
+    /// The spatial index is keyed by `unique_id`; `id_to_path` is what turns
+    /// one back into a key. A delete removes the path first and the index
+    /// entry after, so a concurrent query can briefly see an id with no path.
+    /// That is benign and self-correcting.
+    ///
+    /// It is logged rather than swallowed because the alternative is a silent
+    /// short result: the caller asked for `k` and got fewer, with nothing
+    /// anywhere saying why. A *persistent* count here is not a race, it is
+    /// `id_to_path` drifting from the index, which no other check would catch.
+    fn note_unmapped(found: usize, kept: usize, op: &str) {
+        if kept < found {
+            log::debug!(
+                "{}: {} of {} index hits had no path and were dropped, so the result \
+                 is short by that many. Transient during a concurrent delete; \
+                 persistent means id_to_path has drifted from the spatial index.",
+                op,
+                found - kept,
+                found,
+            );
+        }
     }
 
     /// Find the k nearest stored nodes to the given path's position in hyperbolic space.
@@ -879,15 +905,20 @@ impl HyperbolicTreeTensor {
             .tensor_network
             .nearest_neighbor_point_k(&point, k + 1); // +1 to exclude self
 
+        // Self-exclusion is intended and is not a dropped result, so it is
+        // discounted before counting what genuinely had no path.
+        let mut considered = 0usize;
         let mut paths = Vec::new();
         for (uid, dist) in results {
             if uid == unique_id {
                 continue; // Skip self
             }
+            considered += 1;
             if let Some(p) = self.id_to_path.get(&uid) {
                 paths.push((p.value().clone(), dist));
             }
         }
+        Self::note_unmapped(considered, paths.len(), "find_nearest");
         paths.truncate(k);
         Ok(paths)
     }

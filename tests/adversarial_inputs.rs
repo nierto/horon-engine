@@ -144,26 +144,37 @@ fn semantic_entry_points_survive_hostile_ranges_and_thresholds() {
     }
     let probe = store.get_semantic("/s3").unwrap();
 
-    // Ranges that are empty, degenerate, or past the stored width. These must
-    // not blow up. They are *documented* to zero-extend
-    // (`decode_semantic_slice`), so a range past the data compares zeros to
-    // zeros and every node ties — deterministic, but carrying no information.
-    // Asserted here as the behaviour that exists, not as behaviour endorsed:
-    // see the note in docs/SEMANTIC_INDEX.md.
-    for r in [0..0, 0..4, 2..2, 0..1000, 900..1000] {
-        let _ = store.nearest_semantic(&probe, 3, r.clone());
-        let _ = store.find_similar("/s3", 3, r.clone());
-        let _ = store.find_outliers("/", fp(1.5), r.clone());
-    }
-
-    // A z threshold must be positive to mean anything, and saying so is
-    // correct behaviour — not a failure to survive.
-    for z in [-1e6f64, -1.0, 0.0] {
+    // A slice that cannot carry information is now rejected rather than
+    // answered. `decode_semantic_slice` zero-extends by design, so an empty
+    // range — or one starting past the query's own width — would make every
+    // node tie at distance zero and let the key tie-break pick the "nearest".
+    // A confident, reproducible, information-free answer is the one thing this
+    // engine refuses to give.
+    for r in [0..0, 2..2, 900..1000] {
         assert!(
-            store.find_outliers("/", fp(z), 0..4).is_err(),
-            "non-positive z={z} must be rejected, not silently accepted",
+            store.nearest_semantic(&probe, 3, r.clone()).is_err(),
+            "vacuous range {r:?} must be rejected, not answered",
+        );
+        assert!(
+            store.find_similar("/s3", 3, r.clone()).is_err(),
+            "vacuous range {r:?} must be rejected for find_similar",
         );
     }
+    assert!(
+        store.find_outliers("/", fp(1.5), 0..0).is_err(),
+        "an empty range leaves nothing for a node to be an outlier in",
+    );
+
+    // Zero-extension itself is legitimate and must keep working: a range that
+    // starts inside the data and runs past it compares the overlap.
+    for r in [0..4, 0..1000, 3..64] {
+        assert!(
+            store.nearest_semantic(&probe, 3, r.clone()).is_ok(),
+            "range {r:?} overlaps the data and must still be answered",
+        );
+    }
+    assert!(store.find_outliers("/", fp(1.5), 0..1000).is_ok());
+
     for z in [0.5f64, 1.5, 1e6] {
         assert!(store.find_outliers("/", fp(z), 0..4).is_ok(), "z={z} rejected");
     }
