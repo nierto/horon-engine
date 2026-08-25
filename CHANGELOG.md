@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Changed
+
+- **g_math 0.4.31 → 0.5.0.** Not a data-format change: `from_f64`, `to_f64`,
+  `from_int` and `from_str` are byte-identical across the boundary, so stored
+  cells and file headers stay valid with no regeneration. It **is** a
+  precision change: binary multiply and divide now round to nearest instead of
+  truncating, so a distance, score or position *recomputed* under 0.5.0 can
+  differ from one computed under 0.4.x in the last place. Callers that hash,
+  diff or golden-assert engine output should not mix results across the
+  boundary in one dataset. 0.5.0 also stops arithmetic near the top of a tier
+  from wrapping into a plausible wrong value instead of promoting.
+
+### Fixed
+
+- **The depth cap compared two equal numbers with no slack.** The guard that
+  refuses placement past `max_safe_radius` (21) tested a node's `1 − ‖p‖²`
+  (twenty chained Möbius reflections) against `1 − tanh²(21/2)` (one `tanh`)
+  with a strict `>`. Both are right to a few ULP, but the rounding direction
+  decided which side of the line radius 21 landed on. Under 0.4.x truncation
+  it fell 4 ULP inside; under 0.5.0 round-to-nearest it fell just outside, so
+  `max_depth()` promised 21 levels and the 21st was refused. The guard now
+  carries `safe_radius_slack()` — 2⁻²⁰ in radius, four orders of magnitude
+  above the observed drift — and the cap is inclusive by construction rather
+  than by luck.
+
 Three honesty fixes. No behavioural change to a correct call; each replaces a
 silent or vacuous answer with a stated one.
 

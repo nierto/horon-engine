@@ -123,13 +123,34 @@ pub fn max_safe_radius() -> FixedPoint {
     FixedPoint::from_int(21)
 }
 
-/// `1 − ‖p‖²` at [`max_safe_radius`], as a squared-norm test.
+/// Radius slack added to [`max_safe_radius`] before it becomes a gap test.
+///
+/// Purely a rounding-safety bound, not a geometric one. The guard in
+/// `add_node_inner` compares two quantities that are *meant to be equal* at
+/// the cap: `1 − ‖p‖²` of a node placed at radius 21 (twenty chained Möbius
+/// reflections) against `1 − tanh²(21/2)` (one `tanh`). Both are correct to
+/// a handful of ULP, but not the *same* handful, and a strict compare with no
+/// slack lets the rounding direction decide whether the documented depth is
+/// accepted or refused.
+///
+/// That happened on the g_math 0.4 → 0.5 upgrade: multiply and divide went
+/// from truncation to round-to-nearest, the reflected node at radius 21 moved
+/// from 4 ULP inside the line to just past it, and `max_depth()` kept
+/// promising a level the store refused. In radius terms the drift is ~1e-10;
+/// 2⁻²⁰ is four orders of magnitude above it and far below any level spacing.
+#[inline]
+pub fn safe_radius_slack() -> FixedPoint {
+    FixedPoint::from_raw(1 << 44)
+}
+
+/// `1 − ‖p‖²` at [`max_safe_radius`] plus [`safe_radius_slack`], as a
+/// squared-norm test.
 ///
 /// Checking the radius directly would need `artanh` (16 µs) on every insert;
-/// this is one subtraction and a compare. `1 − tanh²(21/2) ≈ 3.06e-9`.
+/// this is one subtraction and a compare. `1 − tanh²(21/2) ≈ 3.03e-9`.
 #[inline]
 pub fn min_safe_disk_gap() -> FixedPoint {
-    let edge = (max_safe_radius() / FixedPoint::from_int(2)).tanh();
+    let edge = ((max_safe_radius() + safe_radius_slack()) / FixedPoint::from_int(2)).tanh();
     FixedPoint::from_int(1) - edge * edge
 }
 
@@ -259,6 +280,23 @@ mod tests {
 
     /// A degenerate tau must not yield a bound of zero, which would silence
     /// the warning this exists to raise.
+    #[test]
+    fn safe_radius_slack_admits_the_cap_and_nothing_near_the_next_level() {
+        let gap_at = |r: FixedPoint| {
+            let e = (r / FixedPoint::from_int(2)).tanh();
+            FixedPoint::from_int(1) - e * e
+        };
+        let exact = gap_at(max_safe_radius());
+        let guard = min_safe_disk_gap();
+        // Slack is real: a node exactly at the cap is inside by a margin that
+        // dwarfs any rounding of the placement path.
+        assert!(guard < exact);
+        assert!(exact - guard > FixedPoint::from_raw(1 << 12));
+        // ... and tiny: a node 1/1024 of a radius unit past the cap is refused.
+        let past = gap_at(max_safe_radius() + FixedPoint::from_int(1) / FixedPoint::from_int(1024));
+        assert!(guard > past);
+    }
+
     #[test]
     fn max_degree_is_at_least_one_for_any_tau() {
         for t in [0.0f64, 0.001, 40.0] {
