@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.1 - 2026-08-31
+
+### Changed
+
+- **g_math 0.5.0 → 0.6 (resolves to 0.6.1).** Additive over 0.5.x: no
+  function this engine calls changed its signature or its rounding on the
+  embedded profile (0.5.1's fixes are in the scientific-profile square root,
+  the wide-integer orderings and the decimal types; 0.6.x adds certified
+  intervals, exact predicates and a fused quadratic form). Every stored cell
+  and file header stays valid; every test in the suite passed unchanged on
+  the new version. Bumped so downstream crates that also depend on g_math
+  can resolve a single version.
+
 ## 0.7.0 - 2026-08-25
 
 ### Changed
