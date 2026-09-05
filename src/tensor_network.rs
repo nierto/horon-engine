@@ -29,10 +29,19 @@ pub struct NodeMetadata {
     pub content_type: Option<String>,
     /// User-defined metadata
     pub metadata: HashMap<String, String>,
-    /// Creation timestamp (seconds since epoch)
-    pub created_at: u64,
-    /// Last update timestamp
-    pub updated_at: u64,
+    /// When *this process* built the in-memory node, in seconds since the
+    /// epoch.
+    ///
+    /// **Not a creation time.** Nodes are re-materialised on every load —
+    /// replayed from a snapshot and a WAL — so this resets to "now" each time
+    /// a store is opened, and it is deliberately not persisted by any
+    /// consumer. It was called `created_at` until 0.8.0, which was a lie a
+    /// downstream determinism audit caught: folding it into a content hash
+    /// made two reads of one byte-identical file disagree.
+    pub materialized_at: u64,
+    /// When this process last mutated the node. Process-local, like
+    /// [`Self::materialized_at`]; resets on reload.
+    pub touched_at: u64,
 }
 
 impl NodeMetadata {
@@ -47,14 +56,14 @@ impl NodeMetadata {
             key,
             content_type,
             metadata: HashMap::new(),
-            created_at: now,
-            updated_at: now,
+            materialized_at: now,
+            touched_at: now,
         }
     }
 
-    /// Touch the updated_at timestamp.
+    /// Record that this process mutated the node.
     pub fn touch(&mut self) {
-        self.updated_at = std::time::SystemTime::now()
+        self.touched_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
@@ -549,6 +558,9 @@ impl HyperbolicTensorNetwork {
     pub fn set_node_metadata_entry(&self, unique_id: &str, key: &str, val: &str) -> bool {
         if let Some(mut node) = self.nodes.get_mut(unique_id) {
             node.metadata_mut().metadata.insert(key.to_string(), val.to_string());
+            // `touched_at` claims to record the last mutation, so every
+            // mutation has to advance it. Only value updates did.
+            node.metadata_mut().touch();
             true
         } else {
             false
@@ -559,6 +571,7 @@ impl HyperbolicTensorNetwork {
     pub fn set_node_semantic(&self, unique_id: &str, coords: Vec<u8>) -> bool {
         if let Some(mut node) = self.nodes.get_mut(unique_id) {
             node.set_semantic_coords(coords);
+            node.metadata_mut().touch();
             drop(node); // release the shard before the epoch bump
             // Mutation first, then bump: a builder that pre-read the old
             // epoch tags its tree stale (see semantic_index.rs).

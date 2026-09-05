@@ -86,7 +86,7 @@ pub use hash_table::GeometricSignature;
 pub use hyperbolic_geometry::{PoincareDisk, HyperbolicPoint, distance_to_ratio};
 pub use tensor_network::{HyperbolicTensorNetwork, CompressedNode, NodeMetadata};
 pub use tree_tensor::HyperbolicTreeTensor;
-pub use storage::HTTStorage;
+pub use storage::{HTTStorage, NodeInfo};
 pub use extension::{HTTExtension, HTTStorageProvider, ExtensionRegistry};
 pub use klein::{KleinPoint, poincare_to_klein, klein_to_poincare, power_distance};
 pub use store::{Store, StoreConfig, StoreError, QueryAdapter, QueryResult, SemanticOutlier};

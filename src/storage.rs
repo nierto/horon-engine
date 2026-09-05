@@ -32,6 +32,28 @@ pub struct HTTStorage {
     config: HTTStorageConfig,
 }
 
+/// The engine's own view of a node, separate from caller-supplied metadata.
+///
+/// The two timestamps are **process-local**. A node is re-materialised every
+/// time a store is opened — replayed from whatever the consumer persisted — so
+/// neither survives a reload, and neither is a creation time in any durable
+/// sense. They are useful for "what changed while this process was running"
+/// and for nothing else. In particular, **do not fold them into a content
+/// hash**: that is exactly the bug that moved them out of `get_metadata`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeInfo {
+    /// The node's key, as normalised by the store.
+    pub key: String,
+    /// Length of the stored value in bytes.
+    pub size: usize,
+    /// Caller-supplied content type, if one was given at insert.
+    pub content_type: Option<String>,
+    /// When this process built the in-memory node. Resets on reload.
+    pub materialized_at: u64,
+    /// When this process last mutated it. Resets on reload.
+    pub touched_at: u64,
+}
+
 impl HTTStorage {
     /// Create a new HTT storage instance.
     pub fn new(config: HTTStorageConfig) -> Self {
@@ -218,7 +240,17 @@ impl HTTStorage {
         self.htt.exists(&normalized_key)
     }
 
-    /// Get metadata for a key.
+    /// Get a key's metadata: what the caller stored, and nothing else.
+    ///
+    /// Until 0.8.0 this merged four synthesised fields into the returned map —
+    /// `key`, `size`, `created_at` and `updated_at`. The last two were read
+    /// from the wall clock when the node was materialised, so **two reads of
+    /// one unmodified file disagreed**, which a downstream determinism audit
+    /// caught by folding this map into a content hash. Every known consumer
+    /// filtered all four back out, in five separate places.
+    ///
+    /// They now live in [`Self::get_node_info`], typed rather than stringly.
+    /// `content_type` stays here: the caller supplies it and it is persisted.
     pub fn get_metadata(&self, key: &str) -> IntegrationResult<HashMap<String, String>> {
         trace!("HTTStorage::get_metadata - key: {}", key);
 
@@ -227,16 +259,26 @@ impl HTTStorage {
         let meta = node.metadata();
 
         let mut result = meta.metadata.clone();
-        result.insert("key".to_string(), meta.key.clone());
-        result.insert("size".to_string(), node.value().len().to_string());
-        result.insert("created_at".to_string(), meta.created_at.to_string());
-        result.insert("updated_at".to_string(), meta.updated_at.to_string());
-
         if let Some(ref ct) = meta.content_type {
             result.insert("content_type".to_string(), ct.clone());
         }
 
         Ok(result)
+    }
+
+    /// Everything the engine knows about a node that the caller did not set.
+    pub fn get_node_info(&self, key: &str) -> IntegrationResult<NodeInfo> {
+        let normalized_key = Self::normalize_key(key);
+        let node = self.htt.get(&normalized_key)?;
+        let meta = node.metadata();
+
+        Ok(NodeInfo {
+            key: meta.key.clone(),
+            size: node.value().len(),
+            content_type: meta.content_type.clone(),
+            materialized_at: meta.materialized_at,
+            touched_at: meta.touched_at,
+        })
     }
 
     /// Set metadata for a key.

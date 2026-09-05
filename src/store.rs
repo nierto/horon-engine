@@ -23,7 +23,7 @@ use g_math::fixed_point::FixedPoint;
 use super::config::HTTStorageConfig;
 use super::constants::{OUTLIER_KNN, OUTLIER_MIN_POPULATION};
 use super::metric_tree::{EuclideanMetric, MetricVpTree};
-use super::storage::HTTStorage;
+use super::storage::{HTTStorage, NodeInfo};
 use super::tensor_network::HyperbolicTensorNetwork;
 use super::tree_tensor::IntegrationError;
 
@@ -293,6 +293,19 @@ impl Store {
     /// Get all metadata for a key.
     pub fn get_meta(&self, key: &str) -> Result<HashMap<String, String>, StoreError> {
         Ok(self.inner.get_metadata(key)?)
+    }
+
+    /// What the engine knows about a node that you did not set: its key, size,
+    /// content type, and two **process-local** timestamps.
+    ///
+    /// The timestamps do not survive a reload — a node is rebuilt in memory
+    /// every time a store is opened — so they answer "what changed while this
+    /// process was running" and nothing more. Never fold them into a content
+    /// hash. Until 0.8.0 they leaked into [`Self::get_meta`] under the names
+    /// `created_at` and `updated_at`, where they made two reads of one
+    /// unmodified file disagree.
+    pub fn get_node_info(&self, key: &str) -> Result<NodeInfo, StoreError> {
+        Ok(self.inner.get_node_info(key)?)
     }
 
     /// Set semantic coordinates on a key (raw Q64.64 bytes, 16 bytes per dimension).

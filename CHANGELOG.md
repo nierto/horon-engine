@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.8.0
+
+Metadata honesty. Reported by a downstream determinism audit (gMaterials,
+2026-09-05) that folded `get_meta` into a content hash and found **two reads of
+one unmodified store disagreeing**.
+
+### Fixed
+
+- **`get_meta` returned the wall clock.** The map carried `created_at` and
+  `updated_at`, read from `SystemTime::now()` when the node was *materialised*
+  — not when it was created. Nodes are rebuilt on every load, so the values
+  described the current process and changed between two reads of the same
+  data. They were never durable either: the file layer stripped them before
+  persisting, in five separate places, and so did every other known consumer.
+  A field that no one could use and that broke anyone who tried.
+
+- **`touched_at` only tracked value updates.** Metadata and semantic writes
+  left it untouched, so a field documenting "the last mutation" missed two
+  kinds of mutation. All three now advance it.
+
+### Changed
+
+**Breaking.** Both changes are mechanical; nothing loses a capability.
+
+- **`get_meta` returns caller-supplied metadata and `content_type`, nothing
+  else.** The four synthesised keys — `key`, `size`, `created_at`,
+  `updated_at` — are gone from it. `_child_index` stays, because unlike those
+  it is durable, deterministic and load-bearing: replay re-derives a node's
+  position from it.
+
+- **`NodeMetadata::created_at` / `updated_at` are now `materialized_at` /
+  `touched_at`**, named for what they actually record. Nothing inside the
+  engine read them; the compiler found both call sites.
+
+### Added
+
+- **`Store::get_node_info` / `HTTStorage::get_node_info` → [`NodeInfo`]**,
+  carrying `key`, `size`, `content_type` and the two timestamps as typed
+  fields rather than stringly ones. The timestamps are documented as
+  process-local and explicitly not for content hashing.
+
 ## 0.7.1 - 2026-08-31
 
 ### Changed
