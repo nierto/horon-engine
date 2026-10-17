@@ -13,7 +13,7 @@
 //! the truth. Aborting the process is not.
 
 use horon_engine::Store;
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 fn populated() -> Store {
     let store = Store::new();

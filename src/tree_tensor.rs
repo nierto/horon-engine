@@ -126,7 +126,7 @@ pub struct HTTConfig {
     /// Cache size for frequently accessed nodes
     cache_size: usize,
     /// Sarkar embedding scale factor τ: parent-child hyperbolic distance
-    tau: g_math::fixed_point::FixedPoint,
+    tau: g_math::fixed_point::Q64_64,
 }
 
 impl HTTConfig {
@@ -151,7 +151,7 @@ impl HTTConfig {
     }
 
     /// Set the Sarkar embedding scale factor τ.
-    pub fn with_tau(mut self, tau: g_math::fixed_point::FixedPoint) -> Self {
+    pub fn with_tau(mut self, tau: g_math::fixed_point::Q64_64) -> Self {
         self.tau = tau;
         self
     }
@@ -172,7 +172,7 @@ impl HTTConfig {
     }
 
     /// Get the Sarkar embedding scale factor τ.
-    pub fn tau(&self) -> g_math::fixed_point::FixedPoint {
+    pub fn tau(&self) -> g_math::fixed_point::Q64_64 {
         self.tau
     }
 }
@@ -862,7 +862,7 @@ impl HyperbolicTreeTensor {
     ///
     /// Answered exactly by the cell index. Returns (path, hyperbolic_distance).
     /// Errors when the index holds nothing.
-    pub fn nearest_neighbor_point(&self, query: &super::hyperbolic_geometry::HyperbolicPoint) -> IntegrationResult<(String, g_math::fixed_point::FixedPoint)> {
+    pub fn nearest_neighbor_point(&self, query: &super::hyperbolic_geometry::HyperbolicPoint) -> IntegrationResult<(String, g_math::fixed_point::Q64_64)> {
         let (uid, dist) = self.tensor_network
             .nearest_neighbor_point(query)
             .ok_or_else(|| IntegrationError::OperationFailed(
@@ -885,7 +885,7 @@ impl HyperbolicTreeTensor {
     /// same as [`Self::find_nearest`]. Only an index that holds no nodes is an
     /// error. Conflating the two used to make `nearest_k(q, 0)` report "no
     /// nodes in tree" against a fully populated store, which is simply untrue.
-    pub fn nearest_neighbor_point_k(&self, query: &super::hyperbolic_geometry::HyperbolicPoint, k: usize) -> IntegrationResult<Vec<(String, g_math::fixed_point::FixedPoint)>> {
+    pub fn nearest_neighbor_point_k(&self, query: &super::hyperbolic_geometry::HyperbolicPoint, k: usize) -> IntegrationResult<Vec<(String, g_math::fixed_point::Q64_64)>> {
         if k == 0 {
             return Ok(Vec::new());
         }
@@ -933,7 +933,7 @@ impl HyperbolicTreeTensor {
 
     /// Find the k nearest stored nodes to the given path's position in hyperbolic space.
     /// Returns paths sorted by ascending hyperbolic distance.
-    pub fn find_nearest(&self, path: &str, k: usize) -> IntegrationResult<Vec<(String, g_math::fixed_point::FixedPoint)>> {
+    pub fn find_nearest(&self, path: &str, k: usize) -> IntegrationResult<Vec<(String, g_math::fixed_point::Q64_64)>> {
         let sig = self
             .path_map
             .get(path)
@@ -987,7 +987,7 @@ impl HyperbolicTreeTensor {
         query_coords: &[u8],
         k: usize,
         dim_range: &Range<usize>,
-    ) -> IntegrationResult<Vec<(String, g_math::fixed_point::FixedPoint)>> {
+    ) -> IntegrationResult<Vec<(String, g_math::fixed_point::Q64_64)>> {
         // The network returns node keys (== the paths registered at insert),
         // already sorted ascending by (distance, key).
         Ok(self.tensor_network.nearest_semantic(query_coords, k, dim_range))
@@ -1002,7 +1002,7 @@ impl HyperbolicTreeTensor {
         path: &str,
         k: usize,
         dim_range: &Range<usize>,
-    ) -> IntegrationResult<Vec<(String, g_math::fixed_point::FixedPoint)>> {
+    ) -> IntegrationResult<Vec<(String, g_math::fixed_point::Q64_64)>> {
         let coords = self.get_semantic(path)?;
 
         // Request k+1 to account for self, then filter.
@@ -1031,7 +1031,7 @@ impl HyperbolicTreeTensor {
 
     /// Find all stored nodes within hyperbolic radius of the given path.
     /// Returns paths and their distances.
-    pub fn find_in_radius(&self, path: &str, radius: g_math::fixed_point::FixedPoint) -> IntegrationResult<Vec<(String, g_math::fixed_point::FixedPoint)>> {
+    pub fn find_in_radius(&self, path: &str, radius: g_math::fixed_point::Q64_64) -> IntegrationResult<Vec<(String, g_math::fixed_point::Q64_64)>> {
         let sig = self
             .path_map
             .get(path)
@@ -1218,7 +1218,7 @@ mod tests {
 
     #[test]
     fn test_find_in_radius() {
-        use g_math::fixed_point::FixedPoint;
+        use g_math::fixed_point::Q64_64 as FixedPoint;
 
         let config = HTTConfig::default();
         let tree = HyperbolicTreeTensor::new(config);

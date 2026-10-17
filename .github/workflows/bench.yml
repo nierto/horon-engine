@@ -36,13 +36,9 @@ jobs:
           rustc --version
 
       - name: Bench spatial_queries
-        env:
-          GMATH_PROFILE: embedded
         run: cargo bench --bench spatial_queries -- ${{ inputs.filter }}
 
       - name: Bench semantic (the O(n×d) scan wall)
-        env:
-          GMATH_PROFILE: embedded
         run: cargo bench --bench semantic -- ${{ inputs.filter }}
 
       - name: Upload criterion reports

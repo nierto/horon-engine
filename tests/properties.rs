@@ -1,9 +1,9 @@
 //! Property-based tests for the engine's geometric and store invariants.
 //!
-//! Run: GMATH_PROFILE=embedded cargo test --test properties
+//! Run: cargo test --test properties
 
 use horon_engine::{klein_to_poincare, poincare_to_klein, HyperbolicPoint, PoincareDisk, Store};
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 use proptest::prelude::*;
 
 /// Encode f64 values as raw Q64.64 semantic bytes (16 bytes per dimension).

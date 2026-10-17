@@ -9,7 +9,7 @@
 //! - CPU feature detection for runtime selection of optimal algorithms
 
 use std::fmt::{self, Debug, Formatter};
-use g_math::fixed_point::{FixedPoint, FixedVector, FixedMatrix};
+use g_math::fixed_point::{Q64_64 as FixedPoint, FixedVector, FixedMatrix};
 use log::debug;
 use crate::constants;
 
@@ -77,7 +77,7 @@ impl SimdOptimization {
 
     /// Perform optimized vector multiplication.
     /// Delegates to gMath's FixedPoint operators (gains SIMD when gMath enables it).
-    pub fn vector_multiply(&self, a: &FixedVector, b: &FixedVector) -> FixedVector {
+    pub fn vector_multiply(&self, a: &FixedVector<FixedPoint>, b: &FixedVector<FixedPoint>) -> FixedVector<FixedPoint> {
         let len = a.len().min(b.len());
         let mut result = FixedVector::new(len);
 
@@ -89,7 +89,7 @@ impl SimdOptimization {
     }
 
     /// Perform optimized matrix-vector multiplication.
-    pub fn matrix_vector_multiply(&self, m: &FixedMatrix, v: &FixedVector) -> FixedVector {
+    pub fn matrix_vector_multiply(&self, m: &FixedMatrix<FixedPoint>, v: &FixedVector<FixedPoint>) -> FixedVector<FixedPoint> {
         assert_eq!(m.cols(), v.len(), "Matrix columns must match vector length");
 
         let mut result = FixedVector::new(m.rows());
@@ -108,8 +108,8 @@ impl SimdOptimization {
     /// Calculate hyperbolic distance using gMath's FixedVector methods.
     pub fn hyperbolic_distance(&self,
                                _disk_radius: FixedPoint,
-                               p1: &FixedVector,
-                               p2: &FixedVector) -> FixedPoint {
+                               p1: &FixedVector<FixedPoint>,
+                               p2: &FixedVector<FixedPoint>) -> FixedPoint {
         // Use gMath's fused Euclidean distance (single materialization)
         let euclidean_distance = p1.distance_to(p2);
 
@@ -144,12 +144,12 @@ impl SimdOptimization {
     }
 
     /// Calculate Euclidean distance using gMath's FixedVector.
-    pub fn euclidean_distance(&self, v1: &FixedVector, v2: &FixedVector) -> FixedPoint {
+    pub fn euclidean_distance(&self, v1: &FixedVector<FixedPoint>, v2: &FixedVector<FixedPoint>) -> FixedPoint {
         v1.distance_to(v2)
     }
 
     /// Calculate vector norm squared.
-    pub fn vector_norm_squared(&self, v: &FixedVector) -> FixedPoint {
+    pub fn vector_norm_squared(&self, v: &FixedVector<FixedPoint>) -> FixedPoint {
         v.dot(v)
     }
 }

@@ -1,13 +1,13 @@
 //! Disk-NN diagnostic: where do the milliseconds in `disk.nearest` live?
 //! Counts metric calls (visits) and times each phase separately.
-//! Run: GMATH_PROFILE=embedded cargo run --release --example disk_nn_diag
+//! Run: cargo run --release --example disk_nn_diag
 
 use std::cell::Cell;
 use std::time::Instant;
 
 use horon_engine::metric_tree::{CachedNormPoint, HyperbolicMetric, Metric, MetricVpTree};
 use horon_engine::{SemanticDisk, Store};
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 struct CountingMetric {
     inner: HyperbolicMetric,

@@ -8,7 +8,7 @@
 //! symbolic concept sequences.
 
 use horon_engine::{SemanticDisk, Store};
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 /// Course-catalog-shaped spec: five categories mapped to dims 16..21.
 fn spec() -> Vec<(&'static str, usize)> {

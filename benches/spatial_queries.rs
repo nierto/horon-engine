@@ -9,10 +9,10 @@
 //!   - Insert throughput at various tree sizes
 //!   - Insert+delete churn
 //!
-//! Run with: GMATH_PROFILE=embedded cargo bench --bench spatial_queries
+//! Run with: cargo bench --bench spatial_queries
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use g_math::fixed_point::{FixedPoint, FixedVector};
+use g_math::fixed_point::{Q64_64 as FixedPoint, FixedVector};
 use horon_engine::{
     HTTStorage, HTTStorageConfig,
     HyperbolicPoint,

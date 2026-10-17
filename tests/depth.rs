@@ -15,7 +15,7 @@
 
 use horon_engine::constants;
 use horon_engine::Store;
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 /// Minimum depth at which two siblings must still find each other.
 /// Measured ceiling is 21 with the current constants; 20 leaves one level of

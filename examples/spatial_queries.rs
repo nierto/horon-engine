@@ -63,7 +63,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     // --- find_in_radius: all nodes within a distance threshold ---
     println!("\n--- Find In Radius ---");
-    let radius = g_math::fixed_point::FixedPoint::from_int(3);
+    let radius = g_math::fixed_point::Q64_64::from_int(3);
     let nearby = storage.find_in_radius("/papers", radius)?;
     println!("  Nodes within radius 3.0 of '/papers':");
     for path in &nearby {
@@ -90,6 +90,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 /// Exact fixed-point coordinates from decimal literals — the public API takes
 /// `FixedPoint`, so tests convert explicitly rather than through a float API.
-fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
-    vals.iter().map(|&v| g_math::fixed_point::FixedPoint::from_f64(v)).collect()
+fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::Q64_64> {
+    vals.iter().map(|&v| g_math::fixed_point::Q64_64::from_f64(v)).collect()
 }

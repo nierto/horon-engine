@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::ops::Range;
 
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 use super::config::HTTStorageConfig;
 use super::constants::{OUTLIER_KNN, OUTLIER_MIN_POPULATION};
@@ -193,7 +193,7 @@ pub trait QueryAdapter: Send + Sync {
 ///
 /// ```
 /// use horon_engine::Store;
-/// use g_math::fixed_point::FixedPoint;
+/// use g_math::fixed_point::Q64_64 as FixedPoint;
 ///
 /// let store = Store::new();
 ///
@@ -351,7 +351,7 @@ impl Store {
     /// `docs/ARCHITECTURE.md`.
     pub fn max_depth(&self) -> u32 {
         let tau = self.inner.shared_htt().tensor_network().tau();
-        (crate::constants::max_safe_radius() / tau).to_int().max(0) as u32
+        crate::constants::floor_to_u32_saturating(crate::constants::max_safe_radius() / tau)
     }
 
     /// Find the nearest stored node to an arbitrary point in hyperbolic space.
@@ -766,8 +766,8 @@ impl Default for Store {
 mod tests {
 
 /// Exact fixed-point coordinates from decimal literals.
-fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
-    vals.iter().map(|&v| g_math::fixed_point::FixedPoint::from_f64(v)).collect()
+fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::Q64_64> {
+    vals.iter().map(|&v| g_math::fixed_point::Q64_64::from_f64(v)).collect()
 }
 
     use super::*;
@@ -877,7 +877,7 @@ fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
         store.put("/x", b"x").unwrap();
         store.put("/y", b"y").unwrap();
 
-        let results = store.find_within("/x", g_math::fixed_point::FixedPoint::from_f64(10.0)).unwrap();
+        let results = store.find_within("/x", g_math::fixed_point::Q64_64::from_f64(10.0)).unwrap();
         assert!(!results.is_empty());
     }
 
@@ -1032,7 +1032,7 @@ fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
 
     #[test]
     fn test_nearest_semantic() {
-        use g_math::fixed_point::FixedPoint;
+        use g_math::fixed_point::Q64_64 as FixedPoint;
 
         let store = Store::new();
         store.put("/courses/trauma/emdr", b"EMDR").unwrap();
@@ -1064,7 +1064,7 @@ fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
 
     #[test]
     fn test_neighbors_semantic() {
-        use g_math::fixed_point::FixedPoint;
+        use g_math::fixed_point::Q64_64 as FixedPoint;
 
         let store = Store::new();
         store.put("/a", b"a").unwrap();
@@ -1094,7 +1094,7 @@ fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
 
     #[test]
     fn test_semantic_distance_utility() {
-        use g_math::fixed_point::FixedPoint;
+        use g_math::fixed_point::Q64_64 as FixedPoint;
 
         let coords = |d0: f64, d1: f64| -> Vec<u8> {
             let mut v = vec![0u8; 2 * 16];

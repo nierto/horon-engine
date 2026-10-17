@@ -6,7 +6,7 @@
 //! zero lost children, zero lost writes, no deadlocks, and spatial/semantic
 //! queries staying coherent while writers run.
 //!
-//! Run: GMATH_PROFILE=embedded cargo test --test concurrency
+//! Run: cargo test --test concurrency
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -202,7 +202,7 @@ fn concurrent_put_and_remove_disjoint_keys() {
 fn semantic_queries_during_semantic_writes() {
     let store = Arc::new(Store::new());
     let encode = |vals: &[f64]| -> Vec<u8> {
-        use g_math::fixed_point::FixedPoint;
+        use g_math::fixed_point::Q64_64 as FixedPoint;
         vals.iter()
             .flat_map(|v| FixedPoint::from_f64(*v).raw().to_le_bytes())
             .collect()

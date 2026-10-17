@@ -7,7 +7,7 @@
 //! their data on Sarkar reconstruction (found by Horon's meaning-addressed
 //! test suite).
 //!
-//! Run: GMATH_PROFILE=embedded cargo test --test rainbow_fanout
+//! Run: cargo test --test rainbow_fanout
 
 use horon_engine::Store;
 
@@ -44,7 +44,7 @@ fn two_thousand_siblings_no_data_crossover() {
 /// (semantic vectors crossing between siblings).
 #[test]
 fn wide_fanout_semantics_stay_attached() {
-    use g_math::fixed_point::FixedPoint;
+    use g_math::fixed_point::Q64_64 as FixedPoint;
     let store = Store::new();
     let n = 1200;
 

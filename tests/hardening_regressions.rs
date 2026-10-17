@@ -7,7 +7,7 @@
 //! than living inside a broader suite.
 
 use horon_engine::Store;
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 fn coords1(v: f64) -> Vec<u8> {
     FixedPoint::from_f64(v).raw().to_le_bytes().to_vec()
@@ -44,7 +44,7 @@ fn find_within_sees_deep_nodes() {
     // Every non-root node sits at hyperbolic distance tau (=1.0) from its
     // parent, so a radius-1.5 query from any node must at least find it.
     for key in ["/n1", "/n1/n2", "/n1/n2/n3", "/n1/n2/n3/n4"] {
-        let hits = store.find_within(key, g_math::fixed_point::FixedPoint::from_f64(1.5)).unwrap();
+        let hits = store.find_within(key, g_math::fixed_point::Q64_64::from_f64(1.5)).unwrap();
         assert!(
             !hits.is_empty(),
             "find_within({}, 1.5) returned nothing — parent is at distance 1.0",
@@ -53,7 +53,7 @@ fn find_within_sees_deep_nodes() {
     }
 
     // The depth-2 node must see both its parent and its sibling-branch child.
-    let hits = store.find_within("/n1/n2", g_math::fixed_point::FixedPoint::from_f64(1.5)).unwrap();
+    let hits = store.find_within("/n1/n2", g_math::fixed_point::Q64_64::from_f64(1.5)).unwrap();
     assert!(hits.contains(&"/n1".to_string()), "parent missing: {:?}", hits);
     assert!(hits.contains(&"/n1/n2/n3".to_string()), "child missing: {:?}", hits);
 }
@@ -127,7 +127,7 @@ fn deep_node_churn_leaves_queries_correct() {
     assert!(!store.exists("/n1/n2/n3/deep"));
 
     // The surviving nodes are still found at their true distances.
-    let hits = store.find_within("/n1/n2", g_math::fixed_point::FixedPoint::from_f64(1.5)).unwrap();
+    let hits = store.find_within("/n1/n2", g_math::fixed_point::Q64_64::from_f64(1.5)).unwrap();
     assert!(hits.contains(&"/n1".to_string()), "parent missing after churn: {:?}", hits);
     assert!(hits.contains(&"/n1/n2/n3".to_string()), "child missing after churn: {:?}", hits);
     assert!(!hits.contains(&"/n1/n2/n3/deep".to_string()), "deleted node ghosted: {:?}", hits);
@@ -188,6 +188,6 @@ fn concurrent_sibling_churn_stays_consistent() {
 }
 
 /// Exact fixed-point coordinates from decimal literals.
-fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
-    vals.iter().map(|&v| g_math::fixed_point::FixedPoint::from_f64(v)).collect()
+fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::Q64_64> {
+    vals.iter().map(|&v| g_math::fixed_point::Q64_64::from_f64(v)).collect()
 }

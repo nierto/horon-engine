@@ -33,7 +33,7 @@
 //! more work, never toward a plausible answer.
 
 use dashmap::DashMap;
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 use crate::hyperbolic_geometry::HyperbolicPoint;
 use crate::metric_tree::{CachedNormPoint, HyperbolicMetric, Metric};
@@ -348,21 +348,38 @@ impl CellIndex {
         if outside <= FixedPoint::from_int(0) {
             return;
         }
-        let cosh_q = (one + norm_sq) / outside;
-        // sinh r_q = 2‖q‖/(1−‖q‖²), computed WITHOUT squaring the denominator.
-        //
-        // The closed form 4‖q‖²/(1−‖q‖²)² looks cheaper — no sqrt — but
-        // squaring `outside` destroys it: at hyperbolic radius 20 that term is
-        // 5e-9, and its square, 2.5e-17, sits only ~460 units above Q64.64's
-        // 5.4e-20 resolution, leaving under three significant digits. The
-        // resulting `sinh_q` was wrong by ~6e5, so `cosh_q − sinh_q` (which
-        // must equal e^-r_q ≈ 1e-9) came out as 6e5 and every band bound was
-        // nonsense — a query at depth 19 ranked shallow ancestors first.
-        //
-        // `norm_sq` is near 1, so its sqrt is accurate, and dividing by
-        // `outside` once keeps the small quantity to the first power.
-        let sinh_q = FixedPoint::from_int(2) * norm_sq.sqrt() / outside;
-        let sinh_q_sq = sinh_q * sinh_q;
+        // Past hyperbolic radius ~22.5 these no longer fit Q64.64 (sinh²r_q
+        // leaves the ±9.2e18 range), and every outside-disk query lands there:
+        // `ensure_in_disk` projects it to radius ~29. No bound is expressible,
+        // so nothing can be ruled out: visit every occupied cell. Degrades to
+        // a full scan, never to a wrong answer (g_math before 0.7 wrapped here
+        // silently and pruned on garbage bounds).
+        let bounds = (|| {
+            let cosh_q = (one + norm_sq).try_div(outside).ok()?;
+            // sinh r_q = 2‖q‖/(1−‖q‖²), computed WITHOUT squaring the denominator.
+            //
+            // The closed form 4‖q‖²/(1−‖q‖²)² looks cheaper — no sqrt — but
+            // squaring `outside` destroys it: at hyperbolic radius 20 that term is
+            // 5e-9, and its square, 2.5e-17, sits only ~460 units above Q64.64's
+            // 5.4e-20 resolution, leaving under three significant digits. The
+            // resulting `sinh_q` was wrong by ~6e5, so `cosh_q − sinh_q` (which
+            // must equal e^-r_q ≈ 1e-9) came out as 6e5 and every band bound was
+            // nonsense — a query at depth 19 ranked shallow ancestors first.
+            //
+            // `norm_sq` is near 1, so its sqrt is accurate, and dividing by
+            // `outside` once keeps the small quantity to the first power.
+            let sinh_q = (FixedPoint::from_int(2) * norm_sq.sqrt()).try_div(outside).ok()?;
+            let sinh_q_sq = sinh_q.try_mul(sinh_q).ok()?;
+            Some((cosh_q, sinh_q, sinh_q_sq))
+        })();
+        let Some((cosh_q, sinh_q, sinh_q_sq)) = bounds else {
+            let mut all: Vec<CellId> = self.cells.iter().map(|e| *e.key()).collect();
+            all.sort();
+            for cell in all {
+                visit(cell);
+            }
+            return;
+        };
 
         // Occupied bands, ordered by radial bound then index (deterministic).
         let mut order: Vec<(FixedPoint, i32)> = self

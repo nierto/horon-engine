@@ -46,7 +46,7 @@
 //! - KNN candidates are totally ordered by `(score, unique_id)`; identical
 //!   inputs produce byte-identical results.
 
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 use crate::constants;
 use crate::hyperbolic_geometry::HyperbolicPoint;

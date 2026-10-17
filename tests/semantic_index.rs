@@ -11,7 +11,7 @@ use std::ops::Range;
 
 use horon_engine::constants::SEMANTIC_INDEX_MIN_NODES;
 use horon_engine::Store;
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 /// Encode values for dims 16..16+vals.len() as raw Q64.64 bytes
 /// (dims 0..16 zeroed, GACL-reserved).
@@ -64,8 +64,8 @@ fn reference_knn(
     query: &[u8],
     k: usize,
     range: Range<usize>,
-) -> Vec<(String, g_math::fixed_point::FixedPoint)> {
-    let mut all: Vec<(String, g_math::fixed_point::FixedPoint)> = written
+) -> Vec<(String, g_math::fixed_point::Q64_64)> {
+    let mut all: Vec<(String, g_math::fixed_point::Q64_64)> = written
         .iter()
         .map(|(key, c)| (key.clone(), Store::semantic_distance(query, c, range.clone())))
         .collect();
@@ -125,7 +125,7 @@ fn index_invalidates_on_write_and_delete() {
     store.set_semantic(moved, query.clone()).unwrap();
     let after = store.nearest_semantic(&query, 3, range.clone()).unwrap();
     assert_eq!(after[0].0, moved, "stale index: write not visible");
-    assert_eq!(after[0].1, g_math::fixed_point::FixedPoint::from_int(0));
+    assert_eq!(after[0].1, g_math::fixed_point::Q64_64::from_int(0));
 
     // Delete it again: it must vanish from the results.
     store.remove(moved).unwrap();
@@ -160,5 +160,5 @@ fn ties_break_deterministically_by_key() {
         vec!["/n/00010", "/n/00020", "/n/00030", "/n/00040", "/n/00050"],
         "distance-zero ties must be sorted by key"
     );
-    assert!(r1.iter().all(|(_, d)| *d == g_math::fixed_point::FixedPoint::from_int(0)));
+    assert!(r1.iter().all(|(_, d)| *d == g_math::fixed_point::Q64_64::from_int(0)));
 }

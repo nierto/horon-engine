@@ -91,12 +91,8 @@ horon-engine = "0.6"
 ```
 
 All arithmetic is [gMath](https://github.com/nierto/gMath) Q64.64 fixed
-point. The determinism contract is defined on the embedded profile, so build
-with:
-
-```sh
-GMATH_PROFILE=embedded cargo build
-```
+point (`g_math::fixed_point::Q64_64`). The format is a type, so no build
+profile or environment variable is involved.
 
 ## API reference
 

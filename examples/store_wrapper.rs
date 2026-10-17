@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("2 nearest neighbors of /config/cache: {:?}", neighbors);
 
     // Find all nodes within a hyperbolic distance
-    let nearby = store.find_within("/config", g_math::fixed_point::FixedPoint::from_f64(5.0))?;
+    let nearby = store.find_within("/config", g_math::fixed_point::Q64_64::from_f64(5.0))?;
     println!("nodes within radius 5.0 of /config: {:?}", nearby);
 
     // --- Delete ---
@@ -68,6 +68,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Exact fixed-point coordinates from decimal literals — the public API takes
 /// `FixedPoint`, so tests convert explicitly rather than through a float API.
-fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
-    vals.iter().map(|&v| g_math::fixed_point::FixedPoint::from_f64(v)).collect()
+fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::Q64_64> {
+    vals.iter().map(|&v| g_math::fixed_point::Q64_64::from_f64(v)).collect()
 }

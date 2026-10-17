@@ -8,7 +8,7 @@
 //! - Persistence configuration
 
 use std::fmt::{self, Debug, Formatter};
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 /// Configuration for HTT storage.
 #[derive(Clone)]

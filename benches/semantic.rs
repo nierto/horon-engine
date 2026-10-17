@@ -12,12 +12,12 @@
 //!     write: epoch bump → full O(n log n) rebuild → query)
 //!   - semantic_distance (single-pair primitive baseline)
 //!
-//! Run with: GMATH_PROFILE=embedded cargo bench --bench semantic
+//! Run with: cargo bench --bench semantic
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use horon_engine::tensor_network::NodeMetadata;
 use horon_engine::{HyperbolicTensorNetwork, Store};
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 const DIMS: usize = 8;
 

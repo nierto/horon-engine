@@ -30,11 +30,8 @@ jobs:
 
       - name: Check (all targets, warnings are errors — missing_docs is enforced)
         env:
-          GMATH_PROFILE: embedded
           RUSTFLAGS: -D warnings
         run: cargo check --all-targets
 
       - name: Test
-        env:
-          GMATH_PROFILE: embedded
         run: cargo test

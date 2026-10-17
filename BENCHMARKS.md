@@ -26,9 +26,9 @@ numbers (`TEST_RESULTS.md` retired).
 ## How to reproduce
 
 ```sh
-GMATH_PROFILE=embedded cargo bench --bench spatial_queries
-GMATH_PROFILE=embedded cargo bench --bench semantic       # semantic suite
-GMATH_PROFILE=embedded cargo run --release --example concurrency_bench
+cargo bench --bench spatial_queries
+cargo bench --bench semantic       # semantic suite
+cargo run --release --example concurrency_bench
 ```
 
 ## Geometric primitives (criterion medians)

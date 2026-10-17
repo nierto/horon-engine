@@ -16,7 +16,7 @@
 //! hyperbolic space, making it perfect for HTT's hierarchical representations.
 
 use std::fmt::{self, Debug, Formatter};
-use g_math::fixed_point::{FixedPoint, FixedVector};
+use g_math::fixed_point::{Q64_64 as FixedPoint, FixedVector};
 use crate::constants;
 
 /// A point in the Poincaré disk model of hyperbolic space.
@@ -29,14 +29,14 @@ use crate::constants;
 pub struct HyperbolicPoint {
     /// Coordinates in the Poincaré disk using fixed-point representation
     /// The disk has radius 1, so all valid points must have norm < 1
-    coords: FixedVector,
+    coords: FixedVector<FixedPoint>,
 }
 
 impl HyperbolicPoint {
     /// Create a new point in the Poincaré disk with the given coordinates.
     ///
     /// Coordinates are automatically projected into the disk if they're outside.
-    pub fn new(coords: FixedVector) -> Self {
+    pub fn new(coords: FixedVector<FixedPoint>) -> Self {
         let mut point = Self { coords };
         point.ensure_in_disk();
         point
@@ -83,12 +83,12 @@ impl HyperbolicPoint {
     }
 
     /// Get a reference to the underlying coordinates.
-    pub fn coords(&self) -> &FixedVector {
+    pub fn coords(&self) -> &FixedVector<FixedPoint> {
         &self.coords
     }
 
     /// Get a mutable reference to the underlying coordinates.
-    pub fn coords_mut(&mut self) -> &mut FixedVector {
+    pub fn coords_mut(&mut self) -> &mut FixedVector<FixedPoint> {
         &mut self.coords
     }
 
@@ -340,7 +340,7 @@ impl HyperbolicPoint {
     /// Create a point at a specified distance and direction from this point.
     ///
     /// The direction is specified as a Euclidean vector that gets normalized.
-    pub fn point_at_distance(&self, direction: &FixedVector, distance: FixedPoint) -> Self {
+    pub fn point_at_distance(&self, direction: &FixedVector<FixedPoint>, distance: FixedPoint) -> Self {
         let dimension = self.dimension();
         assert_eq!(dimension, direction.len(), "Direction vector must have the same dimension");
 
@@ -457,13 +457,13 @@ impl PoincareDisk {
     }
 
     /// Create a new point from Euclidean coordinates, projecting to the disk.
-    pub fn point_from_euclidean(&self, coords: FixedVector) -> HyperbolicPoint {
+    pub fn point_from_euclidean(&self, coords: FixedVector<FixedPoint>) -> HyperbolicPoint {
         assert_eq!(coords.len(), self.dimension, "Coordinates must match disk dimension");
         HyperbolicPoint::new(coords)
     }
 
     /// Create a new point from FixedPoint coordinates, projecting to the disk.
-    pub fn point_from_coords(&self, coords: FixedVector) -> HyperbolicPoint {
+    pub fn point_from_coords(&self, coords: FixedVector<FixedPoint>) -> HyperbolicPoint {
         assert_eq!(coords.len(), self.dimension, "Coordinates must match disk dimension");
         HyperbolicPoint::new(coords)
     }
@@ -475,7 +475,7 @@ impl PoincareDisk {
     }
 
     /// Project a Euclidean point to the hyperbolic space.
-    pub fn project(&self, point: &FixedVector) -> HyperbolicPoint {
+    pub fn project(&self, point: &FixedVector<FixedPoint>) -> HyperbolicPoint {
         self.point_from_euclidean(point.clone())
     }
 
@@ -490,7 +490,7 @@ impl PoincareDisk {
     }
 
     /// Create a point at the specified radial distance from the origin.
-    pub fn point_at_distance_from_origin(&self, direction: &FixedVector, distance: FixedPoint) -> HyperbolicPoint {
+    pub fn point_at_distance_from_origin(&self, direction: &FixedVector<FixedPoint>, distance: FixedPoint) -> HyperbolicPoint {
         self.origin().point_at_distance(direction, distance)
     }
 

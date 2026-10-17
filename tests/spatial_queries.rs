@@ -18,7 +18,7 @@
 //! Named for the power diagram until 0.6.0, when the power cells and the point
 //! location grid were removed; 31 of these 34 tests never tested either.
 
-use g_math::fixed_point::{FixedPoint, FixedVector};
+use g_math::fixed_point::{Q64_64 as FixedPoint, FixedVector};
 use horon_engine::{
     HTTStorage, HTTStorageConfig,
     HyperbolicPoint, PoincareDisk,
@@ -823,6 +823,6 @@ fn test_stats_reflect_operations() {
 
 /// Exact fixed-point coordinates from decimal literals — the public API takes
 /// `FixedPoint`, so tests convert explicitly rather than through a float API.
-fn fpv(vals: &[f32]) -> Vec<g_math::fixed_point::FixedPoint> {
-    vals.iter().map(|&v| g_math::fixed_point::FixedPoint::from_f64(v as f64)).collect()
+fn fpv(vals: &[f32]) -> Vec<g_math::fixed_point::Q64_64> {
+    vals.iter().map(|&v| g_math::fixed_point::Q64_64::from_f64(v as f64)).collect()
 }

@@ -18,7 +18,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 use crate::constants::SEMANTIC_INDEX_MAX_SLICES;
 use crate::metric_tree::{EuclideanMetric, MetricVpTree};

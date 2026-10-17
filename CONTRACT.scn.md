@@ -10,7 +10,7 @@ Per-symbol truth: docblocks (`cargo doc --open`). Code wins over docs.
 Store := in-memory hyperbolic tree-tensor store | Sarkar embedding in the Poincare disk | tree == its own spatial index
 Implements: path-keyed CRUD + spatial k-NN via a computed cell index (radial bands x angular sectors, ring expansion under a proven lower bound) + semantic slice queries via epoch-cached VP-trees
 Maintains: exact spatial answers independent of placement quality; positions are a pure function of the insertion sequence, derived not stored
-Coordinates: g_math Q64.64 fixed point (pinned =0.5.0); persisted by the horon crate; no I/O of its own
+Coordinates: g_math Q64.64 fixed point (g_math 0.7, Q64_64); persisted by the horon crate; no I/O of its own
 ```
 
 ## ::ANCHOR
@@ -28,8 +28,8 @@ CONCEPT: determinism-by-construction, structural-similarity-as-distance, punctua
 ARCHITECTURAL_LAYER: in-memory engine (no persistence; the horon crate owns .htt durability)
 STACK: g_math (arithmetic) -> horon-engine (this crate) -> horon (.htt persistence)
 LIFECYCLE: Store::new() | Store::with_config(StoreConfig::new().capacity(n).tau(t)) -> put/query -> drop
-BUILD: GMATH_PROFILE=embedded cargo build      # the determinism contract is defined on this profile
-TEST:  GMATH_PROFILE=embedded cargo test --all-features
+BUILD: cargo build                             # Q64.64 (g_math Q64_64) is fixed by type; no build profile
+TEST:  cargo test --all-features
 ```
 
 ## ::INTERFACE
@@ -82,7 +82,7 @@ CUSTOM_QUERY: impl QueryAdapter -> store.query(adapter, expr)
 
 ```
 GUARANTEE: deterministic results: identical operation sequence, identical output, any platform
-REQUIRES:  GMATH_PROFILE=embedded; g_math pinned =0.5.0
+REQUIRES:  g_math 0.7 Q64_64 (Fixed<i128, 64>)
 ENSURES:   replayable state; ties always break by (distance, key)
 NEVER:     floats in the compute path (owner ruling; API-boundary f64 display values only)
 
@@ -114,7 +114,7 @@ CONSTRAINT: reads are lock-free; writes stripe on the parent (64 stripes); no ou
 ## ::GRAPH
 
 ```
-DEPENDS_ON:   g_math =0.5.0 (fixed point), dashmap, serde, sha3
+DEPENDS_ON:   g_math 0.7 (Q64_64 fixed point), dashmap, serde, sha3
 PROVIDES_TO:  horon (.htt persistence facade re-exports Store, StoreError, SemanticOutlier, SemanticDisk)
 DOCS:         PROOF.md (insertion theorem) | BENCHMARKS.md (measured costs)
               | docs/SEMANTIC_INDEX.md | docs/SEMANTIC_DISK.md | docs/HYPERBOLIC_INDEX.md

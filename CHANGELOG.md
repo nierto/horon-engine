@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **g_math 0.6 → 0.7.** 0.7 makes the fixed-point format a type and removes
+  `FixedPoint`, the `GMATH_PROFILE` build variable and the profile features.
+  The engine uses `g_math::fixed_point::Q64_64` (`Fixed<i128, 64>`), the
+  format the embedded profile selected, so stored and computed values are the
+  same Q64.64 integers; no build profile or environment variable is involved
+  any more. **Public signatures now take g_math 0.7's `Q64_64`**: a caller
+  passing a g_math 0.6 `FixedPoint` must move to 0.7 too.
+- 0.7 rounds the transcendentals (`tanh`, `sqrt`, `exp`, `atan`, ...)
+  correctly where 0.6 was not, so a recomputed position, distance or score can
+  differ from 0.8.0 in the last place. Do not mix results across the boundary
+  in one dataset.
+
+### Fixed
+
+g_math 0.7 panics where 0.6.1 returned a wrapped value. Each of these was a
+silent wrong answer under 0.6.1, found by the upgrade:
+
+- **A small `tau` panicked on the first insert.** The precision-budget check
+  and `max_depth()` take `floor(44 / tau)` and `floor(21 / tau)` through an
+  i32. Any `tau <= 2e-8` left that range: under 0.6.1 the count wrapped,
+  under 0.7 `put` and `max_depth()` panicked. Both now use an exact
+  saturating floor (`constants::floor_to_u32_saturating`).
+- **`max_degree_for_tau` returned garbage past `tau ~ 21.04`.** At 21.04 it
+  returned 1 where the bound is 2.16e9; from 22 to 40 it returned arbitrary
+  wrapped values. It now grows monotonically and saturates at `u32::MAX`.
+- **A query past hyperbolic radius ~22.5 overflowed the pruning bounds**, and
+  every outside-disk query lands there (it is projected to radius ~29).
+  `sinh² r_q` left Q64.64; 0.6.1 wrapped it and pruned on garbage bounds.
+  `nearest`/`nearest_k` now scan every occupied cell when no bound is
+  expressible: slower for those queries, never wrong because of the bound.
+
 ## 0.8.0
 
 Metadata honesty. Reported by a downstream determinism audit (gMaterials,

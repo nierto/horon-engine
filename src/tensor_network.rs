@@ -12,7 +12,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::ops::Range;
 use std::sync::Mutex;
 use dashmap::DashMap;
-use g_math::fixed_point::{FixedPoint, FixedVector};
+use g_math::fixed_point::{Q64_64 as FixedPoint, FixedVector};
 use super::hyperbolic_geometry::{PoincareDisk, HyperbolicPoint};
 use super::hash_table::GeometricSignature;
 use crate::constants;
@@ -203,16 +203,6 @@ pub struct HyperbolicTensorNetwork {
 impl HyperbolicTensorNetwork {
     /// Create a new hyperbolic tensor network with the given Sarkar scale factor τ.
     pub fn new(dimension: usize, tau: FixedPoint) -> Self {
-        // Semantic coordinates and persisted geometry assume a 16-byte Q64.64
-        // FixedPoint. GMATH_PROFILE is a build-time env var, so a rebuild under
-        // a different profile would silently reinterpret those bytes — fail
-        // loudly instead.
-        assert_eq!(
-            FixedPoint::raw_byte_len(), 16,
-            "horon-engine requires the 16-byte Q64.64 g_math profile (GMATH_PROFILE=embedded); \
-             rebuild with the correct profile"
-        );
-
         Self {
             poincare_disk: PoincareDisk::new(dimension),
             cell_index: CellIndex::default(),
@@ -283,7 +273,8 @@ impl HyperbolicTensorNetwork {
         // degrades near the disk boundary. Warn as inserts approach the
         // budget rather than silently losing angular precision.
         if self.tau > FixedPoint::from_int(0) {
-            let depth_budget = (FixedPoint::from_int(44) / self.tau).to_int() as u32;
+            let depth_budget =
+                crate::constants::floor_to_u32_saturating(FixedPoint::from_int(44) / self.tau);
             if level.saturating_mul(10) >= depth_budget.saturating_mul(9) {
                 log::warn!(
                     "insert '{}' at depth {} approaches the Q64.64 precision budget (~{} levels at tau={}); sibling positions may lose separation",
@@ -336,7 +327,7 @@ impl HyperbolicTensorNetwork {
                     metadata.key,
                     level,
                     crate::constants::max_safe_radius().to_f64(),
-                    (crate::constants::max_safe_radius() / self.tau).to_int(),
+                    crate::constants::floor_to_u32_saturating(crate::constants::max_safe_radius() / self.tau),
                     self.tau.to_f64(),
                 );
                 return None;

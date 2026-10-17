@@ -293,9 +293,9 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "g_math"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c310ee7b42d579a4881bf218c6dd1e24abed4eea0a94c14ebb7b34eee918edd"
+checksum = "680ba1695920ae8c9f6b0ec876d1c8613e7873f6c4d027654f93471d84f3b043"
 dependencies = [
  "num-bigint",
  "num-integer",

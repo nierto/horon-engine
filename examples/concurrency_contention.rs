@@ -3,7 +3,7 @@
 //! Shows that writes to the SAME parent serialize correctly via StripedLock<64>,
 //! while writes to DIFFERENT parents proceed in parallel.
 //!
-//! Run: GMATH_PROFILE=embedded cargo run --release --example concurrency_contention
+//! Run: cargo run --release --example concurrency_contention
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

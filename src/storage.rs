@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 use log::trace;
 use super::tree_tensor::{HyperbolicTreeTensor, HTTConfig, SharedHTT, IntegrationError, IntegrationResult};
 use super::config::HTTStorageConfig;
@@ -480,8 +480,8 @@ impl HTTStorage {
 mod tests {
 
 /// Exact fixed-point coordinates from decimal literals.
-fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
-    vals.iter().map(|&v| g_math::fixed_point::FixedPoint::from_f64(v)).collect()
+fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::Q64_64> {
+    vals.iter().map(|&v| g_math::fixed_point::Q64_64::from_f64(v)).collect()
 }
 
     use super::*;
@@ -554,7 +554,7 @@ fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
 
     #[test]
     fn test_find_in_radius_api() {
-        use g_math::fixed_point::FixedPoint;
+        use g_math::fixed_point::Q64_64 as FixedPoint;
 
         let config = HTTStorageConfig::default();
         let storage = HTTStorage::new(config);

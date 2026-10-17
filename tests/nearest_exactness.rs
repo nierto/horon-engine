@@ -14,7 +14,7 @@
 //! below and 4 of 30 in the flat one.
 
 use horon_engine::Store;
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 /// Deep, unbalanced: branch depths 2/5/8/11, plus three shallow siblings per
 /// branch — a wide spread of Klein norms, which is what breaks a uniform grid.

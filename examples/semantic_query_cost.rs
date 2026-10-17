@@ -1,8 +1,8 @@
 //! Full-mode (in-memory) semantic k-NN cost — the Tier 3 measurement.
 //!
-//!     GMATH_PROFILE=embedded cargo run --release --example semantic_query_cost -- 12000
+//!     cargo run --release --example semantic_query_cost -- 12000
 
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 use horon_engine::Store;
 use std::time::Instant;
 

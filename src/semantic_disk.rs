@@ -30,7 +30,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 use crate::hyperbolic_geometry::HyperbolicPoint;
 use crate::klein::{self, KleinPoint};
@@ -281,7 +281,7 @@ impl SemanticDisk {
         let zero = FixedPoint::from_int(0);
         let one = FixedPoint::from_int(1);
         let mut denom = zero;
-        let mut numer: Option<g_math::fixed_point::FixedVector> = None;
+        let mut numer: Option<g_math::fixed_point::FixedVector<FixedPoint>> = None;
         for (a, w) in self.anchors.iter().zip(weights) {
             if *w <= zero {
                 continue;

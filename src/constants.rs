@@ -3,7 +3,7 @@
 //! All constants are constructed as exact rational values using
 //! FixedPoint integer division. No floats are used.
 
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 /// Below this many nodes, `nearest_semantic` stays on the brute-force scan:
 /// a VP-tree build costs O(n log n) distance evaluations, which small stores
@@ -174,12 +174,19 @@ pub fn max_degree_for_tau(tau: FixedPoint) -> u32 {
     if denom <= FixedPoint::from_int(0) {
         return u32::MAX;
     }
-    let d = pi() / denom;
-    if d <= FixedPoint::from_int(0) {
-        1
-    } else {
-        d.to_int().max(1) as u32
-    }
+    floor_to_u32_saturating(pi() / denom).max(1)
+}
+
+/// `floor(x)` clamped to `0..=u32::MAX`, exactly.
+///
+/// For counts derived by division (`21 / tau`, `pi / denom`), which leave the
+/// i32 range of `to_int` once tau is small or large: `to_int` wrapped
+/// silently before g_math 0.6.4 (`max_degree_for_tau(21.04)` gave 1 instead
+/// of 2.16e9) and panics since, which made any `tau <= 2e-8` panic on the
+/// first insert. The shift is exact because Q64_64 has 64 fraction bits.
+#[inline]
+pub fn floor_to_u32_saturating(x: FixedPoint) -> u32 {
+    (x.raw() >> 64).clamp(0, u32::MAX as i128) as u32
 }
 
 /// Pi, parsed from string for maximum precision
@@ -302,5 +309,29 @@ mod tests {
         for t in [0.0f64, 0.001, 40.0] {
             assert!(max_degree_for_tau(FixedPoint::from_f64(t)) >= 1);
         }
+    }
+
+    #[test]
+    fn max_degree_stays_monotone_past_the_i32_range() {
+        // The bound grows like (pi/2)·e^tau: it leaves i32 near tau = 21.04
+        // and u32 near 21.72. It must keep growing, then saturate.
+        assert_eq!(max_degree_for_tau(FixedPoint::from_str("21")), 2_071_590_911);
+        assert!(max_degree_for_tau(FixedPoint::from_str("21.04")) > i32::MAX as u32);
+        let mut prev = 0u32;
+        for t in ["21", "21.04", "21.05", "21.7", "22", "25", "30", "40"] {
+            let d = max_degree_for_tau(FixedPoint::from_str(t));
+            assert!(d >= prev, "max_degree fell from {} to {} at tau = {}", prev, d, t);
+            prev = d;
+        }
+        assert_eq!(max_degree_for_tau(FixedPoint::from_int(40)), u32::MAX);
+    }
+
+    #[test]
+    fn floor_to_u32_saturating_is_exact_and_clamped() {
+        assert_eq!(floor_to_u32_saturating(FixedPoint::from_str("2.999")), 2);
+        assert_eq!(floor_to_u32_saturating(FixedPoint::from_str("-0.5")), 0);
+        assert_eq!(floor_to_u32_saturating(FixedPoint::from_str("4294967295.9")), u32::MAX);
+        assert_eq!(floor_to_u32_saturating(FixedPoint::from_str("4294967296")), u32::MAX);
+        assert_eq!(floor_to_u32_saturating(FixedPoint::from_str("3000000000")), 3_000_000_000);
     }
 }

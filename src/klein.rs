@@ -23,7 +23,7 @@
 //! - Power distance: pd(q, p_i) = ||q - p_i||² - w_i
 //! - Nielsen 2009: hyperbolic Voronoi cells = Euclidean power cells in Klein model
 
-use g_math::fixed_point::{FixedPoint, FixedVector};
+use g_math::fixed_point::{Q64_64 as FixedPoint, FixedVector};
 use crate::constants;
 use crate::hyperbolic_geometry::HyperbolicPoint;
 
@@ -38,14 +38,14 @@ use crate::hyperbolic_geometry::HyperbolicPoint;
 #[derive(Clone, Debug)]
 pub struct KleinPoint {
     /// Klein disk coordinates (||coords|| < 1)
-    pub coords: FixedVector,
+    pub coords: FixedVector<FixedPoint>,
     /// Power weight: w = 1 - ||coords||²
     pub weight: FixedPoint,
 }
 
 impl KleinPoint {
     /// Create a KleinPoint from raw coordinates, computing the weight.
-    pub fn new(coords: FixedVector) -> Self {
+    pub fn new(coords: FixedVector<FixedPoint>) -> Self {
         let weight = FixedPoint::from_int(1) - coords.length_squared();
         Self { coords, weight }
     }
@@ -131,7 +131,7 @@ pub fn weighted_barycenter(sites: &[(KleinPoint, FixedPoint)]) -> Option<KleinPo
 
     let mut dim = 0;
     let mut denom = zero;
-    let mut numer: Option<FixedVector> = None;
+    let mut numer: Option<FixedVector<FixedPoint>> = None;
 
     for (site, w) in sites {
         if *w <= zero {
@@ -180,7 +180,7 @@ pub fn weighted_barycenter(sites: &[(KleinPoint, FixedPoint)]) -> Option<KleinPo
 /// pd(q, p_i) = ||q - p_i||² - w_i
 ///
 /// The nearest neighbor in hyperbolic Voronoi = argmin of power distance.
-pub fn power_distance(query: &FixedVector, site: &KleinPoint) -> FixedPoint {
+pub fn power_distance(query: &FixedVector<FixedPoint>, site: &KleinPoint) -> FixedPoint {
     let dim = query.len();
     assert_eq!(dim, site.dimension(), "Dimension mismatch");
 
@@ -201,7 +201,7 @@ pub fn power_distance(query: &FixedVector, site: &KleinPoint) -> FixedPoint {
 /// Find the nearest neighbor by minimum power distance (brute force).
 ///
 /// Returns (index, power_distance) of the nearest site.
-pub fn nearest_by_power_distance(query: &FixedVector, sites: &[KleinPoint]) -> Option<(usize, FixedPoint)> {
+pub fn nearest_by_power_distance(query: &FixedVector<FixedPoint>, sites: &[KleinPoint]) -> Option<(usize, FixedPoint)> {
     if sites.is_empty() {
         return None;
     }

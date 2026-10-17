@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use horon_engine::Store;
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 fn coords(vals: &[f64]) -> Vec<u8> {
     let mut out = vec![0u8; 16 * 16];
@@ -51,7 +51,7 @@ fn embed_upgrades_a_chain_and_preserves_identity() {
     assert_eq!(hits[0].1.to_f64(), 0.0);
 
     // Spatial world now sees the chain: the parent is within reach.
-    let near = store.find_within("/a/b/c", g_math::fixed_point::FixedPoint::from_f64(1.5)).unwrap();
+    let near = store.find_within("/a/b/c", g_math::fixed_point::Q64_64::from_f64(1.5)).unwrap();
     assert!(near.contains(&"/a/b".to_string()), "parent not spatially visible: {:?}", near);
 }
 
@@ -77,13 +77,13 @@ fn embedded_child_joins_its_full_parent_geometrically() {
     store.embed_existing("/p/lazy").unwrap();
 
     // The upgraded child must be reachable from its embedded sibling.
-    let near = store.find_within("/p/full", g_math::fixed_point::FixedPoint::from_f64(3.0)).unwrap();
+    let near = store.find_within("/p/full", g_math::fixed_point::Q64_64::from_f64(3.0)).unwrap();
     assert!(near.contains(&"/p/lazy".to_string()), "embedded child unreachable: {:?}", near);
 
     // And deleting it afterwards must work through the full path.
     store.remove("/p/lazy").unwrap();
     assert!(!store.exists("/p/lazy"));
-    let near = store.find_within("/p/full", g_math::fixed_point::FixedPoint::from_f64(3.0)).unwrap();
+    let near = store.find_within("/p/full", g_math::fixed_point::Q64_64::from_f64(3.0)).unwrap();
     assert!(!near.contains(&"/p/lazy".to_string()), "deleted node still visible");
 }
 

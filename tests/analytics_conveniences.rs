@@ -6,7 +6,7 @@
 //! populations.
 
 use horon_engine::{SemanticOutlier, Store};
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 /// Encode values for dims 16.. as raw Q64.64 bytes (dims 0..16 zeroed).
 fn coords(vals: &[f64]) -> Vec<u8> {

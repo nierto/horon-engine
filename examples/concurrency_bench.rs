@@ -6,7 +6,7 @@
 //!   3. Mixed read/write workload (readers + writers simultaneously)
 //!   4. Concurrent nearest-neighbor queries
 //!
-//! Run: GMATH_PROFILE=embedded cargo run --release --example concurrency_bench
+//! Run: cargo run --release --example concurrency_bench
 
 use std::sync::Arc;
 use std::thread;
@@ -275,6 +275,6 @@ fn report(label: &str, total_ops: usize, single: Duration, multi: Duration, thre
 }
 
 /// Exact fixed-point coordinates from decimal literals.
-fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::FixedPoint> {
-    vals.iter().map(|&v| g_math::fixed_point::FixedPoint::from_f64(v)).collect()
+fn fp(vals: &[f64]) -> Vec<g_math::fixed_point::Q64_64> {
+    vals.iter().map(|&v| g_math::fixed_point::Q64_64::from_f64(v)).collect()
 }

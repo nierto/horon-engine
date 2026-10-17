@@ -12,7 +12,7 @@
 //! 400-sibling wide one — the two shapes that broke the layer this replaced.
 
 use horon_engine::{HyperbolicPoint, Store};
-use g_math::fixed_point::FixedPoint;
+use g_math::fixed_point::Q64_64 as FixedPoint;
 
 /// Deep and unbalanced: branch depths 2/5/8/11 plus shallow siblings, which is
 /// the spread of Klein norms that broke the fixed buckets.
