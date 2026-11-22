@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.1 - 2026-11-22
+
+### Changed
+
+- **g_math 0.7.0 → 0.7.3, and the requirement is now `0.7.3`.** 0.7.3 makes
+  g_math's division, square roots and transcendentals much faster and returns
+  the same integers as before, so every stored and computed value is
+  unchanged: horon's corpus regenerates byte-identically and both
+  determinism checksums still match. No API change. The g_math fixes in
+  0.7.1 and 0.7.2 (decompositions, wide-integer multiplies) touch nothing
+  the engine calls.
+
+  Measured with this crate's benches against 0.7.0, same machine and
+  settings: hyperbolic distance about 10× faster (−90%), semantic distance
+  −96%, `nearest_semantic` at 10k–100k nodes −77% to −83%, the 10k scan
+  −94%, VP-tree k-nearest −67% to −84%, Poincaré↔Klein −75% to −89%,
+  flat-tree insert −68% to −79%. Power distance, deletes and the marginal
+  insert, which use no division, square root or transcendental, are
+  unchanged.
+
 ## 0.9.0 - 2026-10-17
 
 ### Changed

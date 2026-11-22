@@ -10,7 +10,7 @@ Per-symbol truth: docblocks (`cargo doc --open`). Code wins over docs.
 Store := in-memory hyperbolic tree-tensor store | Sarkar embedding in the Poincare disk | tree == its own spatial index
 Implements: path-keyed CRUD + spatial k-NN via a computed cell index (radial bands x angular sectors, ring expansion under a proven lower bound) + semantic slice queries via epoch-cached VP-trees
 Maintains: exact spatial answers independent of placement quality; positions are a pure function of the insertion sequence, derived not stored
-Coordinates: g_math Q64.64 fixed point (g_math 0.7, Q64_64); persisted by the horon crate; no I/O of its own
+Coordinates: g_math Q64.64 fixed point (g_math 0.7.3+, Q64_64); persisted by the horon crate; no I/O of its own
 ```
 
 ## ::ANCHOR
@@ -82,7 +82,7 @@ CUSTOM_QUERY: impl QueryAdapter -> store.query(adapter, expr)
 
 ```
 GUARANTEE: deterministic results: identical operation sequence, identical output, any platform
-REQUIRES:  g_math 0.7 Q64_64 (Fixed<i128, 64>)
+REQUIRES:  g_math 0.7.3+ Q64_64 (Fixed<i128, 64>)
 ENSURES:   replayable state; ties always break by (distance, key)
 NEVER:     floats in the compute path (owner ruling; API-boundary f64 display values only)
 
@@ -114,7 +114,7 @@ CONSTRAINT: reads are lock-free; writes stripe on the parent (64 stripes); no ou
 ## ::GRAPH
 
 ```
-DEPENDS_ON:   g_math 0.7 (Q64_64 fixed point), dashmap, serde, sha3
+DEPENDS_ON:   g_math 0.7.3+ (Q64_64 fixed point), dashmap, serde, sha3
 PROVIDES_TO:  horon (.htt persistence facade re-exports Store, StoreError, SemanticOutlier, SemanticDisk)
 DOCS:         PROOF.md (insertion theorem) | BENCHMARKS.md (measured costs)
               | docs/SEMANTIC_INDEX.md | docs/SEMANTIC_DISK.md | docs/HYPERBOLIC_INDEX.md
